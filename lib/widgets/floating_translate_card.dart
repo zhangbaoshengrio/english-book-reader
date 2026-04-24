@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/dictionary_service.dart';
+import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 
 const _kToolbarItems = [
@@ -19,6 +20,8 @@ class FloatingTranslateCard extends StatefulWidget {
   final VoidCallback? onUnstar;
   /// Whether the phrase is already starred.
   final bool isStarred;
+  /// Whether auto-speak is enabled (controls visibility of speak button and auto-play).
+  final bool autoSpeak;
 
   const FloatingTranslateCard({
     super.key,
@@ -28,6 +31,7 @@ class FloatingTranslateCard extends StatefulWidget {
     this.onStar,
     this.onUnstar,
     this.isStarred = false,
+    this.autoSpeak = false,
   });
 
   @override
@@ -38,10 +42,21 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
   String? _translation;
   bool _loading = true;
 
+  bool _speaking = false;
+
   @override
   void initState() {
     super.initState();
     _fetch();
+    if (widget.autoSpeak) {
+      TtsService.speak(widget.originalText);
+    }
+  }
+
+  Future<void> _speak() async {
+    setState(() => _speaking = true);
+    await TtsService.speak(widget.originalText);
+    if (mounted) setState(() => _speaking = false);
   }
 
   Future<void> _fetch() async {
@@ -78,6 +93,21 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
                 const Text('翻译',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                 const Spacer(),
+                // Speak button (visible only when autoSpeak is on)
+                if (widget.autoSpeak)
+                  GestureDetector(
+                    onTap: _speaking ? null : _speak,
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: _speaking
+                          ? const SizedBox(
+                              width: 18, height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: AppTheme.primary))
+                          : const Icon(Icons.volume_up_rounded,
+                              size: 20, color: AppTheme.primary),
+                    ),
+                  ),
                 // Star button
                 if (widget.onStar != null || widget.onUnstar != null)
                   GestureDetector(
