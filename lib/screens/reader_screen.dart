@@ -599,6 +599,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  // ── Search panel ─────────────────────────────────────────────────────────
+
+  void _showSearchPanel() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _SearchPanel(
+        paragraphs: widget.paragraphs,
+        onJumpToPage: (page) {
+          Navigator.pop(ctx);
+          _goToPage(page);
+        },
+      ),
+    );
+  }
+
   // ── TOC panel ────────────────────────────────────────────────────────────
 
   List<({int paraIdx, int page, String title})> _buildToc() {
@@ -692,6 +709,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
             color: _autoSpeak ? AppTheme.primary : AppTheme.textTertiary,
             tooltip: _autoSpeak ? '自动发音：开' : '自动发音：关',
             onPressed: _toggleAutoSpeak,
+          ),
+          IconButton(
+            icon: const Icon(Icons.search_rounded, size: 22),
+            color: AppTheme.primary,
+            tooltip: '全文搜索',
+            onPressed: _showSearchPanel,
           ),
           IconButton(
             icon: const Icon(Icons.menu_book_rounded, size: 22),
@@ -1550,6 +1573,209 @@ class _TocPanelState extends State<_TocPanel> with SingleTickerProviderStateMixi
     );
   }
 }
+
+// ── Full-text search panel ────────────────────────────────────────────────────
+
+class _SearchPanel extends StatefulWidget {
+  final List<String> paragraphs;
+  final void Function(int page) onJumpToPage;
+
+  const _SearchPanel({
+    required this.paragraphs,
+    required this.onJumpToPage,
+  });
+
+  @override
+  State<_SearchPanel> createState() => _SearchPanelState();
+}
+
+class _SearchPanelState extends State<_SearchPanel> {
+  final _ctrl = TextEditingController();
+  List<({int page, String snippet})> _results = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.addListener(_onQueryChanged);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.removeListener(_onQueryChanged);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onQueryChanged() {
+    final q = _ctrl.text.trim().toLowerCase();
+    if (q.isEmpty) {
+      setState(() => _results = []);
+      return;
+    }
+    final results = <({int page, String snippet})>[];
+    for (var i = 0; i < widget.paragraphs.length; i++) {
+      final para = widget.paragraphs[i];
+      if (para.toLowerCase().contains(q)) {
+        final snippet = BookParser.extractSentence(para, _ctrl.text.trim());
+        final page = i ~/ BookParser.perPage;
+        results.add((page: page, snippet: snippet));
+        if (results.length >= 200) break; // cap results
+      }
+    }
+    setState(() => _results = results);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.78,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(children: [
+        // Handle
+        Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 8),
+          child: Center(
+            child: Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFDDDDDD),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+        // Search bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: TextField(
+            controller: _ctrl,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: '搜索书中内容...',
+              prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.primary, size: 20),
+              suffixIcon: _ctrl.text.isNotEmpty
+                  ? GestureDetector(
+                      onTap: () { _ctrl.clear(); setState(() => _results = []); },
+                      child: const Icon(Icons.close_rounded, size: 18, color: AppTheme.textTertiary),
+                    )
+                  : null,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFFDDDDDD)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: Color(0xFFDDDDDD)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: AppTheme.primary, width: 1.5),
+              ),
+              filled: true,
+              fillColor: const Color(0xFFF8F8F8),
+            ),
+          ),
+        ),
+        // Result count
+        if (_ctrl.text.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _results.isEmpty ? '未找到结果' : '共 ${_results.length} 处${_results.length >= 200 ? "（已截断）" : ""}',
+                style: const TextStyle(fontSize: 12, color: AppTheme.textTertiary),
+              ),
+            ),
+          ),
+        const Divider(height: 1),
+        // Results list
+        Expanded(
+          child: _results.isEmpty
+              ? Center(
+                  child: Text(
+                    _ctrl.text.trim().isEmpty ? '输入关键词开始搜索' : '未找到"${_ctrl.text.trim()}"',
+                    style: const TextStyle(color: AppTheme.textTertiary, fontSize: 14),
+                  ),
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: _results.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
+                  itemBuilder: (_, i) {
+                    final r = _results[i];
+                    return InkWell(
+                      onTap: () => widget.onJumpToPage(r.page),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('第 ${r.page + 1} 页',
+                              style: const TextStyle(
+                                  fontSize: 11, color: AppTheme.textTertiary, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 4),
+                          _HighlightText(text: r.snippet, query: _ctrl.text.trim()),
+                        ]),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        SizedBox(height: bottom),
+      ]),
+    );
+  }
+}
+
+/// Renders [text] with all occurrences of [query] highlighted in primary color.
+class _HighlightText extends StatelessWidget {
+  final String text;
+  final String query;
+
+  const _HighlightText({required this.text, required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    if (query.isEmpty) {
+      return Text(text, style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.4));
+    }
+    final spans = <TextSpan>[];
+    final lower = text.toLowerCase();
+    final lowerQ = query.toLowerCase();
+    var last = 0;
+    var idx = lower.indexOf(lowerQ);
+    while (idx >= 0) {
+      if (idx > last) {
+        spans.add(TextSpan(text: text.substring(last, idx)));
+      }
+      spans.add(TextSpan(
+        text: text.substring(idx, idx + query.length),
+        style: const TextStyle(
+          color: AppTheme.primary,
+          fontWeight: FontWeight.w700,
+          backgroundColor: Color(0x22007AFF),
+        ),
+      ));
+      last = idx + query.length;
+      idx = lower.indexOf(lowerQ, last);
+    }
+    if (last < text.length) {
+      spans.add(TextSpan(text: text.substring(last)));
+    }
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.4),
+        children: spans,
+      ),
+    );
+  }
+}
+
+// ── Pagination bar ────────────────────────────────────────────────────────────
 
 class _NavBtn extends StatelessWidget {
   final IconData icon;
