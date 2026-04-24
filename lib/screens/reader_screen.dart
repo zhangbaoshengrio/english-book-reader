@@ -991,6 +991,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
       (_ctrl as _VocabTextController)
         ..vocabSet = widget.vocabSet
         ..textColor = widget.textColor;
+      setState(() {}); // force TextField to re-invoke buildTextSpan
     }
   }
 
