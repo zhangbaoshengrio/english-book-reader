@@ -13,12 +13,21 @@ class FloatingTranslateCard extends StatefulWidget {
   final String originalText;
   final VoidCallback onDismiss;
   final void Function(String action, String text)? onToolbarAction;
+  /// Called when user stars the phrase. Receives (phrase, translation).
+  final void Function(String phrase, String translation)? onStar;
+  /// Called when user unstars the phrase.
+  final VoidCallback? onUnstar;
+  /// Whether the phrase is already starred.
+  final bool isStarred;
 
   const FloatingTranslateCard({
     super.key,
     required this.originalText,
     required this.onDismiss,
     this.onToolbarAction,
+    this.onStar,
+    this.onUnstar,
+    this.isStarred = false,
   });
 
   @override
@@ -69,6 +78,28 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
                 const Text('翻译',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                 const Spacer(),
+                // Star button
+                if (widget.onStar != null || widget.onUnstar != null)
+                  GestureDetector(
+                    onTap: () {
+                      if (widget.isStarred) {
+                        widget.onUnstar?.call();
+                      } else {
+                        widget.onStar?.call(
+                          widget.originalText,
+                          _translation ?? '',
+                        );
+                      }
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        widget.isStarred ? Icons.star_rounded : Icons.star_border_rounded,
+                        size: 20,
+                        color: widget.isStarred ? const Color(0xFFFFBB00) : AppTheme.textTertiary,
+                      ),
+                    ),
+                  ),
                 GestureDetector(
                   onTap: widget.onDismiss,
                   child: const Padding(

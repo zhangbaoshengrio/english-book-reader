@@ -345,6 +345,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
             onDismiss: _removeOverlay,
             onToolbarAction: (action, text) =>
                 _onSelectionAction(_selectionActionFromString(action), text),
+            isStarred: _vocabSet.contains(_translateText.toLowerCase()),
+            onStar: (phrase, translation) => _starPhrase(phrase, translation),
+            onUnstar: () => _unstar(_translateText),
           ),
         ),
       ]);
@@ -386,6 +389,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _unstar(String word) async {
     await DatabaseService.deleteWordByName(word);
+    await _refreshVocab();
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  Future<void> _starPhrase(String phrase, String translation) async {
+    await DatabaseService.addOrUpdateWord(VocabEntry(
+      word: phrase,
+      definition: '',
+      chineseMeaning: translation,
+      sentence: '',
+      source: widget.book.title,
+    ));
     await _refreshVocab();
     _overlayEntry?.markNeedsBuild();
   }
