@@ -138,15 +138,14 @@ class BookParser {
     return paragraphs.sublist(start, end);
   }
 
-  /// Extract the sentence containing [word] from [paraText].
-  static String extractSentence(String paraText, String word) {
-    final escaped = RegExp.escape(word);
-    final m = RegExp('\\b$escaped\\b', caseSensitive: false).firstMatch(paraText);
-    if (m == null) return paraText.substring(0, paraText.length.clamp(0, 200));
+  /// Extract the sentence containing [phrase] from [paraText].
+  /// Works for single words and multi-word phrases alike.
+  static String extractSentence(String paraText, String phrase) {
+    final pos = paraText.toLowerCase().indexOf(phrase.toLowerCase());
+    if (pos < 0) return paraText.substring(0, paraText.length.clamp(0, 200));
 
-    final pos = m.start;
     var start = pos;
-    var end   = m.end;
+    var end   = pos + phrase.length;
 
     while (start > 0 && !'.!?'.contains(paraText[start - 1])) { start--; }
     while (start < pos && paraText[start].trim().isEmpty) { start++; }
@@ -155,10 +154,10 @@ class BookParser {
 
     var s = paraText.substring(start, end).trim().replaceAll(RegExp(r'\s+'), ' ');
     if (s.length > 300) {
-      final wi = s.toLowerCase().indexOf(word.toLowerCase());
+      final wi = s.toLowerCase().indexOf(phrase.toLowerCase());
       if (wi >= 0) {
         final a = (wi - 110).clamp(0, s.length);
-        final b = (wi + word.length + 110).clamp(0, s.length);
+        final b = (wi + phrase.length + 110).clamp(0, s.length);
         s = (a > 0 ? '…' : '') + s.substring(a, b) + (b < s.length ? '…' : '');
       } else {
         s = '${s.substring(0, 297)}…';

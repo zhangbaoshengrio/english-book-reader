@@ -43,6 +43,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   WordLookupResult? _overlayResult;
   bool _overlayLoading = false;
   String _translateText = '';
+  String _translateParaText = ''; // paragraph containing the selected phrase
   Offset _tapPos = Offset.zero;
 
   // Para keys — used to call selectWord / clearSelection on each paragraph
@@ -309,10 +310,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // ── Sentence translate overlay ─────────────────────────────────────────────
 
-  void _showTranslateOverlay(String text) {
+  void _showTranslateOverlay(String text, {String paraText = ''}) {
     if (text.trim().isEmpty) return;
     _removeOverlayOnly(); // don't clear paragraph selections
     _translateText = text.trim();
+    _translateParaText = paraText;
 
     final size = MediaQuery.of(context).size;
     const cardW = 320.0;
@@ -394,11 +396,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _starPhrase(String phrase, String translation) async {
+    // If the selected text itself ends with sentence punctuation it IS the sentence.
+    // Otherwise extract the containing sentence from the paragraph.
+    final endsWithPunct = RegExp(r'[.!?]$').hasMatch(phrase.trim());
+    final sentence = endsWithPunct
+        ? phrase.trim()
+        : (_translateParaText.isNotEmpty
+            ? BookParser.extractSentence(_translateParaText, phrase)
+            : '');
     await DatabaseService.addOrUpdateWord(VocabEntry(
       word: phrase,
       definition: '',
       chineseMeaning: translation,
-      sentence: '',
+      sentence: sentence,
       source: widget.book.title,
     ));
     await _refreshVocab();
@@ -781,7 +791,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         },
         onTranslate: (selectedText, globalPos) {
           _tapPos = globalPos;
-          _showTranslateOverlay(selectedText);
+          _showTranslateOverlay(selectedText, paraText: text);
         },
         onSelectionAction: (action, selectedText) =>
             _onSelectionAction(action, selectedText),
@@ -797,6 +807,7 @@ class _VocabTextController extends TextEditingController {
   Set<String> vocabSet;
   Color textColor;
   static final _wordRe = RegExp(r"\b[a-zA-Z]+(?:'[a-zA-Z]+)?\b");
+  static const _hlColor = Color(0x55D4A017);
 
   _VocabTextController({
     required String text,
@@ -811,23 +822,63 @@ class _VocabTextController extends TextEditingController {
     required bool withComposing,
   }) {
     final base = style ?? const TextStyle();
+    final lower = text.toLowerCase();
+
+    // 1. Find all phrase (multi-word) highlight ranges first.
+    //    A phrase entry contains a space; single-word entries are handled per-word below.
+    final phraseRanges = <(int, int)>[];
+    for (final entry in vocabSet) {
+      if (!entry.contains(' ')) continue; // single words handled separately
+      var searchFrom = 0;
+      while (true) {
+        final idx = lower.indexOf(entry, searchFrom);
+        if (idx < 0) break;
+        phraseRanges.add((idx, idx + entry.length));
+        searchFrom = idx + entry.length;
+      }
+    }
+
+    // Helper: is position [pos] inside any phrase range?
+    bool inPhrase(int pos) =>
+        phraseRanges.any((r) => pos >= r.$1 && pos < r.$2);
+
     final spans = <InlineSpan>[];
     var last = 0;
-    for (final m in _wordRe.allMatches(text)) {
-      if (m.start > last) {
-        spans.add(TextSpan(text: text.substring(last, m.start), style: base));
+
+    // 2. Merge phrase ranges and word ranges into a unified span list.
+    //    Sort phrase ranges by start position, then walk through the text.
+    phraseRanges.sort((a, b) => a.$1.compareTo(b.$1));
+
+    // Collect word matches that are NOT inside a phrase range.
+    final wordMatches = _wordRe.allMatches(text)
+        .where((m) => !phraseRanges.any((r) => m.start >= r.$1 && m.end <= r.$2))
+        .toList();
+
+    // Build a combined list of (start, end, isPhrase) events.
+    final events = <(int, int, bool)>[
+      for (final r in phraseRanges) (r.$1, r.$2, true),
+      for (final m in wordMatches) (m.start, m.end, false),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+
+    for (final (start, end, isPhrase) in events) {
+      if (start < last) continue; // overlapping — skip
+      if (start > last) {
+        spans.add(TextSpan(text: text.substring(last, start), style: base));
       }
-      final word = text.substring(m.start, m.end);
-      final inVocab = vocabSet.contains(word.toLowerCase());
+      final chunk = text.substring(start, end);
+      final highlighted = isPhrase
+          ? true
+          : vocabSet.contains(chunk.toLowerCase());
       spans.add(TextSpan(
-        text: word,
+        text: chunk,
         style: base.copyWith(
           decoration: TextDecoration.none,
-          backgroundColor: inVocab ? const Color(0x55D4A017) : null,
+          backgroundColor: highlighted ? _hlColor : null,
         ),
       ));
-      last = m.end;
+      last = end;
     }
+
     if (last < text.length) {
       spans.add(TextSpan(text: text.substring(last), style: base));
     }
