@@ -1,0 +1,53 @@
+name: english_reader
+description: English Book Reader with Vocabulary Builder
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Network
+  http: ^1.2.2
+
+  # Storage
+  sqflite: ^2.3.3+1
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # File picking
+  file_picker: ^8.1.2
+
+  # EPUB/HTML parsing (EPUB is parsed manually via archive)
+  html: ^0.15.4
+
+  # PDF export
+  pdf: ^3.11.1
+  printing: ^5.13.1
+
+  # Share / save exported files
+  share_plus: ^10.0.2
+
+  # Text-to-speech
+  flutter_tts: ^4.0.2
+
+  # Persistent settings
+  shared_preferences: ^2.3.2
+
+  # APKG zip packaging
+  archive: ^3.6.1
+
+  # HTML rendering for dictionary content
+  webview_flutter: ^4.10.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

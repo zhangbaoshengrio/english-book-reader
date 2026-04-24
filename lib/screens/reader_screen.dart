@@ -1,0 +1,1511 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import '../models/book.dart';
+import '../models/bookmark.dart';
+import '../models/definition.dart';
+import '../models/dict_source.dart';
+import '../models/reader_note.dart';
+import '../models/vocab_entry.dart';
+import '../services/book_parser.dart';
+import '../services/database_service.dart';
+import '../services/dictionary_service.dart';
+import '../services/settings_service.dart';
+import '../services/tts_service.dart';
+import '../theme/app_theme.dart';
+import 'settings_screen.dart';
+import '../widgets/floating_word_card.dart';
+import '../widgets/floating_translate_card.dart';
+
+class ReaderScreen extends StatefulWidget {
+  final Book book;
+  final List<String> paragraphs;
+
+  const ReaderScreen({super.key, required this.book, required this.paragraphs});
+
+  @override
+  State<ReaderScreen> createState() => _ReaderScreenState();
+}
+
+class _ReaderScreenState extends State<ReaderScreen> {
+  late int _page;
+  Set<String> _vocabSet = {};
+  Map<String, String> _vocabDefMap = {};
+  List<DictSource> _activeSources = [];
+  final _scroll = ScrollController();
+  late PageController _pageCtrl;
+  Timer? _scrollSaveTimer;
+
+  // Overlay state
+  OverlayEntry? _overlayEntry;
+  String _overlayHitKey = '';
+  WordLookupResult? _overlayResult;
+  bool _overlayLoading = false;
+  String _translateText = '';
+  Offset _tapPos = Offset.zero;
+
+  // Para keys — used to call selectWord / clearSelection on each paragraph
+  final _paraKeys = <int, GlobalKey<_ReaderParagraphState>>{};
+  // Track which paragraph owns the current word selection
+  int _selectedParaIdx = -1;
+
+  // Bookmarks & notes
+  List<Bookmark>   _bookmarks = [];
+  List<ReaderNote> _readerNotes = [];
+
+  // Settings
+  bool   _autoSpeak     = false;
+  double _fontSize      = 18;
+  double _lineHeight    = 1.9;
+  double _margin        = 22;
+  String _theme         = ReaderTheme.paper;
+  String _fontFamily    = 'Georgia';
+  String _pageTurnStyle = PageTurnStyle.scroll;
+
+  Color get _bgColor {
+    switch (_theme) {
+      case ReaderTheme.white: return Colors.white;
+      case ReaderTheme.dark:  return const Color(0xFF1C1C1E);
+      default:                return AppTheme.readerBg;
+    }
+  }
+
+  Color get _textColor {
+    return _theme == ReaderTheme.dark
+        ? const Color(0xFFE5E5E7)
+        : AppTheme.textPrimary;
+  }
+
+  int get _totalPages => BookParser.pageCount(widget.paragraphs.length);
+  List<String> get _curParas => BookParser.getPage(widget.paragraphs, _page);
+
+  @override
+  void initState() {
+    super.initState();
+    _page = widget.book.lastPage.clamp(0, _totalPages - 1);
+    _pageCtrl = PageController(initialPage: _page);
+    _scroll.addListener(_onScrolled);
+    _refreshVocab();
+    _refreshSources();
+    _loadSettings();
+    _refreshBookmarksAndNotes();
+  }
+
+  Future<void> _loadSettings() async {
+    final bookId = widget.book.id ?? 0;
+    final results = await Future.wait([
+      SettingsService.getAutoSpeak(),
+      SettingsService.getFontSize(),
+      SettingsService.getLineHeight(),
+      SettingsService.getTheme(),
+      SettingsService.getFontFamily(),
+      SettingsService.getMargin(),
+      SettingsService.getPageTurnStyle(),
+      SettingsService.getScrollOffset(bookId),
+    ]);
+    if (!mounted) return;
+    final style = results[6] as String;
+    setState(() {
+      _autoSpeak     = results[0] as bool;
+      _fontSize      = results[1] as double;
+      _lineHeight    = results[2] as double;
+      _theme         = results[3] as String;
+      _fontFamily    = results[4] as String;
+      _margin        = results[5] as double;
+      _pageTurnStyle = style;
+    });
+    // Restore scroll position in continuous scroll mode.
+    if (style == PageTurnStyle.scroll) {
+      final offset = results[7] as double;
+      if (offset > 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            _scroll.jumpTo(
+                offset.clamp(0.0, _scroll.position.maxScrollExtent));
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _removeOverlay();
+    _scrollSaveTimer?.cancel();
+    _scroll.removeListener(_onScrolled);
+    _scroll.dispose();
+    _pageCtrl.dispose();
+    _saveProgress();
+    super.dispose();
+  }
+
+  void _clearAllSelections() {
+    for (final k in _paraKeys.values) {
+      k.currentState?.clearSelection();
+    }
+    _selectedParaIdx = -1;
+  }
+
+  Future<void> _refreshVocab() async {
+    final set = await DatabaseService.getVocabWordSet();
+    final map = await DatabaseService.getVocabWordDefMap();
+    if (mounted) setState(() { _vocabSet = set; _vocabDefMap = map; });
+  }
+
+  Future<void> _refreshBookmarksAndNotes() async {
+    final bookId = widget.book.id;
+    if (bookId == null) return;
+    final bm = await DatabaseService.getBookmarks(bookId);
+    final notes = await DatabaseService.getReaderNotes(bookId);
+    if (mounted) setState(() { _bookmarks = bm; _readerNotes = notes; });
+  }
+
+  Future<void> _addBookmark() async {
+    final bookId = widget.book.id;
+    if (bookId == null) return;
+    final paras = BookParser.getPage(widget.paragraphs, _page);
+    final snippet = paras.isNotEmpty
+        ? paras.first.substring(0, paras.first.length.clamp(0, 80))
+        : 'Page ${_page + 1}';
+    await DatabaseService.addBookmark(Bookmark(
+      bookId: bookId, page: _page,
+      snippet: snippet, createdAt: DateTime.now(),
+    ));
+    await _refreshBookmarksAndNotes();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('书签已添加'),
+          duration: const Duration(seconds: 1),
+          backgroundColor: AppTheme.primary,
+        ),
+      );
+    }
+  }
+
+  Future<void> _refreshSources() async {
+    final all = await DatabaseService.getAllDictSources();
+    if (mounted) setState(() => _activeSources = all.where((s) => s.enabled).toList());
+  }
+
+  void _onScrolled() {
+    if (_pageTurnStyle != PageTurnStyle.scroll) return;
+    _scrollSaveTimer?.cancel();
+    _scrollSaveTimer = Timer(const Duration(milliseconds: 600), () {
+      if (widget.book.id != null && _scroll.hasClients) {
+        SettingsService.setScrollOffset(widget.book.id!, _scroll.offset);
+      }
+    });
+  }
+
+  Future<void> _saveProgress() async {
+    if (widget.book.id == null) return;
+    await DatabaseService.updateBookProgress(widget.book.id!, _page, _totalPages);
+    if (_pageTurnStyle == PageTurnStyle.scroll && _scroll.hasClients) {
+      await SettingsService.setScrollOffset(widget.book.id!, _scroll.offset);
+    }
+  }
+
+  void _goPage(int delta) {
+    final next = _page + delta;
+    if (next < 0 || next >= _totalPages) return;
+    _removeOverlay();
+    _paraKeys.clear();
+    if (_pageTurnStyle == PageTurnStyle.swipe) {
+      _pageCtrl.animateToPage(next,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+      // _page updated in onPageChanged
+    } else {
+      setState(() => _page = next);
+      _scroll.animateTo(0, duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+      _saveProgress();
+    }
+  }
+
+  void _toggleAutoSpeak() {
+    final v = !_autoSpeak;
+    setState(() => _autoSpeak = v);
+    SettingsService.setAutoSpeak(v);
+    if (v) TtsService.speak('auto');
+  }
+
+  // ── Word lookup overlay ────────────────────────────────────────────────────
+
+  Future<void> _onWordTap(String word, String paraText, int paraIdx) async {
+    final sentence = BookParser.extractSentence(paraText, word);
+    final hitKey = '${word}_${DateTime.now().millisecondsSinceEpoch}';
+
+    // Clear previous paragraph's selection if different paragraph
+    if (_selectedParaIdx >= 0 && _selectedParaIdx != paraIdx) {
+      _paraKeys[_selectedParaIdx]?.currentState?.clearSelection();
+    }
+    _selectedParaIdx = paraIdx;
+
+    _removeOverlayOnly();
+    _overlayHitKey = hitKey;
+    _overlayResult = null;
+    _overlayLoading = true;
+    _showWordOverlay(word, sentence);
+
+    if (_autoSpeak) TtsService.speak(word);
+
+    final result = await DictionaryService.lookup(word);
+    if (!mounted || _overlayHitKey != hitKey) return;
+    _overlayResult = result;
+    _overlayLoading = false;
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  void _showWordOverlay(String word, String sentence) {
+    final size = MediaQuery.of(context).size;
+    const cardW = 320.0;
+
+    _overlayEntry = OverlayEntry(builder: (ctx) {
+      double left = _tapPos.dx - cardW / 2;
+      left = left.clamp(8.0, size.width - cardW - 8.0);
+      final topPad = MediaQuery.of(ctx).padding.top;
+      final botPad = MediaQuery.of(ctx).padding.bottom;
+      // Estimate max card height: tab list (36% screen) + header + toolbar + tabs + padding
+      final estCardH = size.height * 0.36 + 200.0;
+      final spaceAbove = _tapPos.dy - 24 - topPad - 8;
+      final spaceBelow = size.height - botPad - 8 - (_tapPos.dy + 32);
+      double top;
+      if (spaceAbove >= spaceBelow) {
+        // More room above — show card above tap, clamp so it doesn't go above status bar
+        top = (_tapPos.dy - 24 - estCardH).clamp(topPad + 8, size.height);
+      } else {
+        // More room below — show card below tap, clamp so it doesn't go off screen
+        top = (_tapPos.dy + 32).clamp(topPad + 8, size.height - botPad - estCardH - 8);
+      }
+
+      return Stack(children: [
+        Positioned.fill(child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: _removeOverlay,
+          child: const SizedBox.expand(),
+        )),
+        Positioned(
+          left: left, top: top, width: cardW,
+          child: FloatingWordCard(
+            result: _overlayResult,
+            loading: _overlayLoading,
+            word: word,
+            sentence: sentence,
+            bookTitle: widget.book.title,
+            savedDefinitionText: _vocabDefMap[word.toLowerCase()],
+            allSources: _activeSources,
+            onStar: (def) => _starDefinition(word, sentence, def, _overlayResult?.phonetic ?? ''),
+            onUnstar: () => _unstar(word),
+            onDismiss: _removeOverlay,
+            onEdit: () => _editVocabEntry(word),
+            onToolbarAction: (action, w) => _onWordToolbarAction(action, w),
+          ),
+        ),
+      ]);
+    });
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+  // ── Sentence translate overlay ─────────────────────────────────────────────
+
+  void _showTranslateOverlay(String text) {
+    if (text.trim().isEmpty) return;
+    _removeOverlayOnly(); // don't clear paragraph selections
+    _translateText = text.trim();
+
+    final size = MediaQuery.of(context).size;
+    const cardW = 320.0;
+
+    _overlayEntry = OverlayEntry(builder: (ctx) {
+      double left = _tapPos.dx - cardW / 2;
+      left = left.clamp(8.0, size.width - cardW - 8.0);
+      final topPad = MediaQuery.of(ctx).padding.top;
+      final botPad = MediaQuery.of(ctx).padding.bottom;
+      const estCardH = 360.0;
+      final spaceAbove = _tapPos.dy - 24 - topPad - 8;
+      final spaceBelow = size.height - botPad - 8 - (_tapPos.dy + 32);
+      double top;
+      if (spaceAbove >= spaceBelow) {
+        top = (_tapPos.dy - 24 - estCardH).clamp(topPad + 8, size.height);
+      } else {
+        top = (_tapPos.dy + 32).clamp(topPad + 8, size.height - botPad - estCardH - 8);
+      }
+
+      return Stack(children: [
+        Positioned.fill(child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: _removeOverlay,
+          child: const SizedBox.expand(),
+        )),
+        Positioned(
+          left: left, top: top, width: cardW,
+          child: FloatingTranslateCard(
+            originalText: _translateText,
+            onDismiss: _removeOverlay,
+            onToolbarAction: (action, text) =>
+                _onSelectionAction(_selectionActionFromString(action), text),
+          ),
+        ),
+      ]);
+    });
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+  void _removeOverlayOnly() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  void _removeOverlay() {
+    _removeOverlayOnly();
+    _clearAllSelections();
+  }
+
+  // ── Star / unstar ──────────────────────────────────────────────────────────
+
+  Future<void> _starDefinition(String word, String sentence, Definition def, [String phonetic = '']) async {
+    // Prefer per-definition Chinese, then cached word-level Google Translate.
+    // If neither is ready, fetch now (background fetch may not have completed yet).
+    String cn = def.chineseText.isNotEmpty ? def.chineseText : '';
+    if (cn.isEmpty) {
+      final cached = await DatabaseService.getChineseCached(word.toLowerCase());
+      cn = (cached != null && cached.isNotEmpty)
+          ? cached
+          : await DictionaryService.translateSentence(word);
+    }
+    await DatabaseService.addOrUpdateWord(VocabEntry(
+      word: word, phonetic: phonetic,
+      definition: def.text, chineseMeaning: cn,
+      partOfSpeech: def.partOfSpeech,
+      sentence: sentence, source: widget.book.title,
+    ));
+    await _refreshVocab();
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  Future<void> _unstar(String word) async {
+    await DatabaseService.deleteWordByName(word);
+    await _refreshVocab();
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  Future<void> _editVocabEntry(String word) async {
+    final allWords = await DatabaseService.getAllWords();
+    final entry = allWords.firstWhere(
+      (e) => e.word.toLowerCase() == word.toLowerCase(),
+      orElse: () => VocabEntry(word: word, definition: '', sentence: ''),
+    );
+
+    final phoneticCtrl = TextEditingController(text: entry.phonetic);
+    final posCtrl      = TextEditingController(text: entry.partOfSpeech);
+    final defCtrl      = TextEditingController(text: entry.definition);
+    final cnCtrl       = TextEditingController(text: entry.chineseMeaning);
+    final sentCtrl     = TextEditingController(text: entry.sentence);
+
+    if (!mounted) return;
+    _removeOverlayOnly();
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: _EditVocabSheet(
+          word: word,
+          phoneticCtrl: phoneticCtrl,
+          posCtrl: posCtrl,
+          defCtrl: defCtrl,
+          cnCtrl: cnCtrl,
+          sentCtrl: sentCtrl,
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      await DatabaseService.addOrUpdateWord(VocabEntry(
+        id: entry.id,
+        word: entry.word,
+        phonetic: phoneticCtrl.text.trim(),
+        partOfSpeech: posCtrl.text.trim(),
+        definition: defCtrl.text.trim(),
+        chineseMeaning: cnCtrl.text.trim(),
+        sentence: sentCtrl.text.trim(),
+        source: entry.source,
+        addedAt: entry.addedAt,
+      ));
+      await _refreshVocab();
+      _overlayEntry?.markNeedsBuild();
+    }
+
+    phoneticCtrl.dispose();
+    posCtrl.dispose();
+    defCtrl.dispose();
+    cnCtrl.dispose();
+    sentCtrl.dispose();
+  }
+
+  // ── Word card toolbar actions ──────────────────────────────────────────────
+
+  void _onWordToolbarAction(String action, String word) {
+    switch (action) {
+      case 'copy':
+        Clipboard.setData(ClipboardData(text: word));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)));
+      case 'highlight':
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('划线功能即将上线'), duration: Duration(seconds: 1)));
+      case 'note':
+        _showNoteSheet(word);
+      case 'share':
+        Clipboard.setData(ClipboardData(text: word));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已复制，可粘贴分享'), duration: Duration(seconds: 1)));
+    }
+  }
+
+  // ── Selection toolbar actions ──────────────────────────────────────────────
+
+  _SelectionAction _selectionActionFromString(String s) {
+    switch (s) {
+      case 'copy': return _SelectionAction.copy;
+      case 'search': return _SelectionAction.search;
+      case 'highlight': return _SelectionAction.highlight;
+      case 'note': return _SelectionAction.note;
+      default: return _SelectionAction.share;
+    }
+  }
+
+  void _onSelectionAction(_SelectionAction action, String text) {
+    switch (action) {
+      case _SelectionAction.copy:
+        Clipboard.setData(ClipboardData(text: text));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)),
+        );
+      case _SelectionAction.search:
+        // Single word → word card already open; multi-word → translate overlay
+        _showTranslateOverlay(text);
+      case _SelectionAction.highlight:
+        // TODO: persist highlight ranges
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('划线功能即将上线'), duration: Duration(seconds: 1)),
+        );
+      case _SelectionAction.note:
+        _showNoteSheet(text);
+      case _SelectionAction.share:
+        // Use system share sheet via Clipboard for now
+        Clipboard.setData(ClipboardData(text: text));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已复制，可粘贴分享'), duration: Duration(seconds: 1)),
+        );
+    }
+  }
+
+  void _showNoteSheet(String selectedText) {
+    final ctrl = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 36),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Center(child: Container(width: 36, height: 4,
+              decoration: BoxDecoration(color: const Color(0xFFDDDDDD), borderRadius: BorderRadius.circular(2)))),
+            const SizedBox(height: 16),
+            const Text('笔记', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: const Color(0xFFF5F5F5), borderRadius: BorderRadius.circular(8)),
+              child: Text(selectedText, style: const TextStyle(fontSize: 13, color: Color(0xFF666666), height: 1.5)),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              maxLines: 4, minLines: 3,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: '写下你的笔记...',
+                border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8)),
+                    borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                filled: true, fillColor: Color(0xFFF8F8F8),
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () async {
+                  final bookId = widget.book.id;
+                  if (bookId != null && ctrl.text.trim().isNotEmpty) {
+                    await DatabaseService.addReaderNote(ReaderNote(
+                      bookId: bookId, page: _page,
+                      selectedText: selectedText,
+                      noteText: ctrl.text.trim(),
+                      createdAt: DateTime.now(),
+                    ));
+                    await _refreshBookmarksAndNotes();
+                  }
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('笔记已保存'), duration: Duration(seconds: 1)));
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary, foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  elevation: 0),
+                child: const Text('保存', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              )),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  // ── TOC panel ────────────────────────────────────────────────────────────
+
+  List<({int paraIdx, int page, String title})> _buildToc() {
+    final result = <({int paraIdx, int page, String title})>[];
+    final chapterRe = RegExp(
+      r'^(chapter|part|section|prologue|epilogue|introduction|preface|afterword|appendix|act\s)',
+      caseSensitive: false,
+    );
+    for (var i = 0; i < widget.paragraphs.length; i++) {
+      final t = widget.paragraphs[i].trim();
+      if (t.isEmpty || t.length > 100) continue;
+      final isChapter = chapterRe.hasMatch(t);
+      final isAllCaps = t == t.toUpperCase() && t.length >= 3 && RegExp(r'[A-Z]').hasMatch(t);
+      if (isChapter || isAllCaps) {
+        result.add((paraIdx: i, page: i ~/ BookParser.perPage, title: t));
+      }
+    }
+    return result;
+  }
+
+  void _showTocPanel() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _TocPanel(
+        toc: _buildToc(),
+        bookmarks: _bookmarks,
+        notes: _readerNotes,
+        currentPage: _page,
+        totalPages: _totalPages,
+        onJumpToPage: (page) {
+          Navigator.pop(ctx);
+          _goToPage(page);
+        },
+        onDeleteBookmark: (id) async {
+          await DatabaseService.deleteBookmark(id);
+          await _refreshBookmarksAndNotes();
+          if (ctx.mounted) Navigator.pop(ctx);
+          _showTocPanel();
+        },
+        onDeleteNote: (id) async {
+          await DatabaseService.deleteReaderNote(id);
+          await _refreshBookmarksAndNotes();
+          if (ctx.mounted) Navigator.pop(ctx);
+          _showTocPanel();
+        },
+      ),
+    );
+  }
+
+  void _goToPage(int page) {
+    final target = page.clamp(0, _totalPages - 1);
+    _removeOverlay();
+    _paraKeys.clear();
+    if (_pageTurnStyle == PageTurnStyle.swipe) {
+      _pageCtrl.animateToPage(target,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+    } else {
+      setState(() => _page = target);
+      _scroll.animateTo(0, duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+      _saveProgress();
+    }
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _bgColor,
+      appBar: AppBar(
+        backgroundColor: _bgColor,
+        surfaceTintColor: Colors.transparent,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+          color: AppTheme.primary,
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Column(children: [
+          Text(widget.book.title,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis),
+          Text('Page ${_page + 1} of $_totalPages',
+              style: const TextStyle(
+                  fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w400)),
+        ]),
+        actions: [
+          IconButton(
+            icon: Icon(_autoSpeak ? Icons.volume_up_rounded : Icons.volume_off_rounded, size: 22),
+            color: _autoSpeak ? AppTheme.primary : AppTheme.textTertiary,
+            tooltip: _autoSpeak ? '自动发音：开' : '自动发音：关',
+            onPressed: _toggleAutoSpeak,
+          ),
+          IconButton(
+            icon: const Icon(Icons.menu_book_rounded, size: 22),
+            color: AppTheme.primary,
+            tooltip: '目录/书签/笔记',
+            onPressed: _showTocPanel,
+          ),
+          IconButton(
+            icon: const Icon(Icons.tune_rounded, size: 22),
+            color: AppTheme.primary,
+            tooltip: '设置',
+            onPressed: () async {
+              await Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()));
+              _loadSettings();
+            },
+          ),
+        ],
+      ),
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onVerticalDragEnd: (d) {
+          final v = d.primaryVelocity ?? 0;
+          if (v > 700) _addBookmark();        // 下拉 → 书签
+          else if (v < -700) Navigator.of(context).pop(); // 上拉 → 关闭
+        },
+        child: _pageTurnStyle == PageTurnStyle.swipe
+            ? _buildSwipeContent()
+            : _buildScrollContent(),
+      ),
+    );
+  }
+
+  // ── Scroll mode ───────────────────────────────────────────────────────────
+  Widget _buildScrollContent() {
+    return ListView.builder(
+      controller: _scroll,
+      padding: EdgeInsets.symmetric(horizontal: _margin, vertical: 20),
+      itemCount: widget.paragraphs.length,
+      itemBuilder: (ctx, idx) {
+        final text = widget.paragraphs[idx];
+        final key = _paraKeys.putIfAbsent(idx, () => GlobalKey<_ReaderParagraphState>());
+        return _buildParaWidget(key: key, text: text, paraKey: idx);
+      },
+    );
+  }
+
+  // ── Swipe mode ────────────────────────────────────────────────────────────
+  Widget _buildSwipeContent() {
+    return PageView.builder(
+      controller: _pageCtrl,
+      itemCount: _totalPages,
+      onPageChanged: (idx) {
+        _removeOverlay();
+        _paraKeys.clear();
+        setState(() => _page = idx);
+        _saveProgress();
+      },
+      itemBuilder: (ctx, pageIdx) {
+        final paras = BookParser.getPage(widget.paragraphs, pageIdx);
+        return Padding(
+          padding: EdgeInsets.symmetric(horizontal: _margin, vertical: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: List.generate(paras.length, (paraIdx) {
+              final text = paras[paraIdx];
+              final compositeKey = pageIdx * 10000 + paraIdx;
+              final key = _paraKeys.putIfAbsent(
+                  compositeKey, () => GlobalKey<_ReaderParagraphState>());
+              return _buildParaWidget(key: key, text: text, paraKey: compositeKey);
+            }),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Shared paragraph builder ──────────────────────────────────────────────
+  Widget _buildParaWidget({
+    required GlobalKey<_ReaderParagraphState> key,
+    required String text,
+    required int paraKey,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: _ReaderParagraph(
+        key: key,
+        text: text,
+        vocabSet: _vocabSet,
+        fontSize: _fontSize,
+        lineHeight: _lineHeight,
+        textColor: _textColor,
+        fontFamily: _fontFamily,
+        onWordTap: (word, globalPos) {
+          _tapPos = globalPos;
+          _onWordTap(word, text, paraKey);
+        },
+        onTranslate: (selectedText, globalPos) {
+          _tapPos = globalPos;
+          _showTranslateOverlay(selectedText);
+        },
+        onSelectionAction: (action, selectedText) =>
+            _onSelectionAction(action, selectedText),
+        onTapOutside: () {},
+      ),
+    );
+  }
+}
+
+// ── Custom controller that renders vocab underlines ────────────────────────────
+
+class _VocabTextController extends TextEditingController {
+  Set<String> vocabSet;
+  Color textColor;
+  static final _wordRe = RegExp(r"\b[a-zA-Z]+(?:'[a-zA-Z]+)?\b");
+
+  _VocabTextController({
+    required String text,
+    required this.vocabSet,
+    required this.textColor,
+  }) : super(text: text);
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    final base = style ?? const TextStyle();
+    final spans = <InlineSpan>[];
+    var last = 0;
+    for (final m in _wordRe.allMatches(text)) {
+      if (m.start > last) {
+        spans.add(TextSpan(text: text.substring(last, m.start), style: base));
+      }
+      final word = text.substring(m.start, m.end);
+      final inVocab = vocabSet.contains(word.toLowerCase());
+      spans.add(TextSpan(
+        text: word,
+        style: base.copyWith(
+          decoration: TextDecoration.none,
+          backgroundColor: inVocab ? const Color(0x55D4A017) : null,
+        ),
+      ));
+      last = m.end;
+    }
+    if (last < text.length) {
+      spans.add(TextSpan(text: text.substring(last), style: base));
+    }
+    return TextSpan(children: spans);
+  }
+}
+
+// ── Reader paragraph: TextField(readOnly) with native selection handles ────────
+
+enum _SelectionAction { copy, search, highlight, note, share }
+
+class _ReaderParagraph extends StatefulWidget {
+  final String text;
+  final Set<String> vocabSet;
+  final double fontSize;
+  final double lineHeight;
+  final Color textColor;
+  final String fontFamily;
+  final void Function(String word, Offset globalPos) onWordTap;
+  final void Function(String selectedText, Offset globalPos) onTranslate;
+  final void Function(_SelectionAction action, String selectedText) onSelectionAction;
+  final VoidCallback onTapOutside;
+
+  const _ReaderParagraph({
+    super.key,
+    required this.text,
+    required this.vocabSet,
+    required this.fontSize,
+    required this.lineHeight,
+    required this.textColor,
+    required this.fontFamily,
+    required this.onWordTap,
+    required this.onTranslate,
+    required this.onSelectionAction,
+    required this.onTapOutside,
+  });
+
+  @override
+  State<_ReaderParagraph> createState() => _ReaderParagraphState();
+}
+
+class _ReaderParagraphState extends State<_ReaderParagraph> {
+  late final _VocabTextController _ctrl;
+  final _focusNode = FocusNode();
+  late List<(int, int)> _wordRanges;
+  Timer? _translateTimer;
+  Timer? _suppressOutsideTimer;
+  bool _suppressListener = false;
+  bool _suppressOutside = false;
+  @override
+  void initState() {
+    super.initState();
+    _wordRanges = _buildWordRanges(widget.text);
+    _ctrl = _buildController();
+    _ctrl.addListener(_onSelectionChanged);
+  }
+
+  void _onSelectionChanged() {
+    final sel = _ctrl.selection;
+    if (sel.isCollapsed || sel.start < 0) return;
+    final selected = widget.text.substring(sel.start, sel.end).trim();
+    if (selected.isEmpty) return;
+
+    if (_suppressListener) return; // programmatic single-word tap — no toolbar
+
+    // Single exact word → already handled by onTap
+    final isExactWord = _wordRanges.any((r) => r.$1 == sel.start && r.$2 == sel.end);
+    if (isExactWord) return;
+
+    // Multi-word: debounce 400ms
+    _translateTimer?.cancel();
+    _translateTimer = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      _suppressOutside = true;
+      _suppressOutsideTimer?.cancel();
+      _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+        _suppressOutside = false;
+      });
+      final anchor = _getSelectionAnchor();
+      widget.onTranslate(selected, anchor);
+    });
+  }
+
+  Offset _getSelectionAnchor() {
+    try {
+      final ro = context.findRenderObject();
+      RenderEditable? re;
+      void visit(RenderObject o) {
+        if (o is RenderEditable) { re = o; return; }
+        o.visitChildren(visit);
+      }
+      if (ro != null) visit(ro);
+      if (re == null) return Offset.zero;
+      final sel = _ctrl.selection;
+      final boxes = re!.getBoxesForSelection(sel);
+      if (boxes.isNotEmpty) {
+        final b = boxes.first;
+        return re!.localToGlobal(Offset(b.left, b.top));
+      }
+    } catch (_) {}
+    return Offset.zero;
+  }
+
+  @override
+  void didUpdateWidget(_ReaderParagraph old) {
+    super.didUpdateWidget(old);
+    if (old.text != widget.text || old.vocabSet != widget.vocabSet ||
+        old.textColor != widget.textColor || old.fontSize != widget.fontSize) {
+      _wordRanges = _buildWordRanges(widget.text);
+      (_ctrl as _VocabTextController)
+        ..vocabSet = widget.vocabSet
+        ..textColor = widget.textColor;
+    }
+  }
+
+  @override
+  void dispose() {
+    _translateTimer?.cancel();
+    _suppressOutsideTimer?.cancel();
+    _ctrl.removeListener(_onSelectionChanged);
+    _ctrl.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  static List<(int, int)> _buildWordRanges(String text) {
+    final re = RegExp(r"\b[a-zA-Z]+(?:'[a-zA-Z]+)?\b");
+    return re.allMatches(text).map((m) => (m.start, m.end)).toList();
+  }
+
+  _VocabTextController _buildController() {
+    return _VocabTextController(
+      text: widget.text,
+      vocabSet: widget.vocabSet,
+      textColor: widget.textColor,
+    );
+  }
+
+  void clearSelection() {
+    if (_ctrl.selection.start != -1) {
+      _ctrl.selection = const TextSelection.collapsed(offset: -1);
+    }
+    if (_focusNode.hasFocus) _focusNode.unfocus();
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _ctrl,
+      focusNode: _focusNode,
+      readOnly: true,
+      maxLines: null,
+      enableInteractiveSelection: true,
+      style: TextStyle(
+        fontSize: widget.fontSize,
+        height: widget.lineHeight,
+        color: widget.textColor,
+        fontFamily: widget.fontFamily,
+        letterSpacing: 0.15,
+      ),
+      decoration: const InputDecoration(
+        border: InputBorder.none,
+        isDense: true,
+        contentPadding: EdgeInsets.zero,
+      ),
+      contextMenuBuilder: (ctx, editableState) => const SizedBox.shrink(),
+      onTapAlwaysCalled: true,
+      onTap: () {
+        // After a tap, TextField places a collapsed cursor at baseOffset.
+        // Expand it to the full word and trigger lookup.
+        final offset = _ctrl.selection.baseOffset;
+        if (offset < 0) return;
+        for (final (start, end) in _wordRanges) {
+          if (offset >= start && offset <= end) {
+            final word = widget.text.substring(start, end);
+            _suppressListener = true;
+            _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
+            _suppressListener = false;
+            final anchor = _getSelectionAnchor();
+            widget.onWordTap(word, anchor);
+            // Don't show toolbar for single-word tap — word card is shown instead.
+            // Toolbar appears when user drags handles to extend the selection.
+            return;
+          }
+        }
+        // Tapped on non-word area
+      },
+      onTapOutside: (_) {
+        // Ignore onTapOutside for a short window after translate fires,
+        // because the translate overlay appearing triggers an outside-tap event.
+        if (_suppressOutside) return;
+        widget.onTapOutside();
+      },
+    );
+  }
+}
+
+// ── Pagination bar ────────────────────────────────────────────────────────────
+
+class _PaginationBar extends StatelessWidget {
+  final int page;
+  final int total;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+
+  const _PaginationBar({required this.page, required this.total, this.onPrev, this.onNext});
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.readerBg,
+        border: Border(top: BorderSide(color: AppTheme.separator.withValues(alpha: 0.6))),
+      ),
+      padding: EdgeInsets.fromLTRB(20, 10, 20, 10 + bottom),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          _NavBtn(icon: Icons.chevron_left_rounded, label: 'Prev', onTap: onPrev),
+          Text('${page + 1} / $total',
+              style: const TextStyle(
+                  fontSize: 14, color: AppTheme.textSecondary, fontWeight: FontWeight.w500)),
+          _NavBtn(icon: Icons.chevron_right_rounded, label: 'Next', trailingIcon: true, onTap: onNext),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Edit vocab bottom sheet ───────────────────────────────────────────────────
+
+class _EditVocabSheet extends StatelessWidget {
+  final String word;
+  final TextEditingController phoneticCtrl;
+  final TextEditingController posCtrl;
+  final TextEditingController defCtrl;
+  final TextEditingController cnCtrl;
+  final TextEditingController sentCtrl;
+
+  const _EditVocabSheet({
+    required this.word,
+    required this.phoneticCtrl,
+    required this.posCtrl,
+    required this.defCtrl,
+    required this.cnCtrl,
+    required this.sentCtrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 36),
+      child: SingleChildScrollView(
+       child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Handle + title ───────────────────────────────────────────────
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFDDDDDD),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Row(children: [
+            Text(word,
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            GestureDetector(
+              onTap: () => Navigator.pop(context, false),
+              child: const Icon(Icons.close_rounded,
+                  color: AppTheme.textTertiary),
+            ),
+          ]),
+          const SizedBox(height: 18),
+          // ── 音标 ─────────────────────────────────────────────────────────
+          const Text('音标',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: phoneticCtrl,
+            maxLines: 1,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              filled: true,
+              fillColor: Color(0xFFF8F8F8),
+              hintText: '如 /wɜːrd/',
+            ),
+          ),
+          const SizedBox(height: 14),
+          // ── 词性 ─────────────────────────────────────────────────────────
+          const Text('词性',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: posCtrl,
+            maxLines: 1,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              filled: true,
+              fillColor: Color(0xFFF8F8F8),
+              hintText: '如 noun / verb / adj',
+            ),
+          ),
+          const SizedBox(height: 14),
+          // ── 定义（英文）───────────────────────────────────────────────────
+          const Text('定义',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: defCtrl,
+            maxLines: 3,
+            minLines: 2,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              filled: true,
+              fillColor: Color(0xFFF8F8F8),
+              hintText: '英文解释',
+            ),
+          ),
+          const SizedBox(height: 14),
+          // ── 翻译（中文）───────────────────────────────────────────────────
+          const Text('翻译',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: cnCtrl,
+            maxLines: 2,
+            minLines: 1,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              filled: true,
+              fillColor: Color(0xFFF8F8F8),
+              hintText: '中文翻译',
+            ),
+          ),
+          const SizedBox(height: 14),
+          // ── 例句 ─────────────────────────────────────────────────────────
+          const Text('例句',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: sentCtrl,
+            maxLines: 4,
+            minLines: 2,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              filled: true,
+              fillColor: Color(0xFFF8F8F8),
+            ),
+          ),
+          const SizedBox(height: 20),
+          // ── 保存 ─────────────────────────────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                elevation: 0,
+              ),
+              child: const Text('保存',
+                  style: TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ],
+       ),
+      ),
+    );
+  }
+}
+
+// ── TOC / Bookmarks / Notes panel ────────────────────────────────────────────
+
+class _TocPanel extends StatefulWidget {
+  final List<({int paraIdx, int page, String title})> toc;
+  final List<Bookmark> bookmarks;
+  final List<ReaderNote> notes;
+  final int currentPage;
+  final int totalPages;
+  final void Function(int page) onJumpToPage;
+  final void Function(int id) onDeleteBookmark;
+  final void Function(int id) onDeleteNote;
+
+  const _TocPanel({
+    required this.toc,
+    required this.bookmarks,
+    required this.notes,
+    required this.currentPage,
+    required this.totalPages,
+    required this.onJumpToPage,
+    required this.onDeleteBookmark,
+    required this.onDeleteNote,
+  });
+
+  @override
+  State<_TocPanel> createState() => _TocPanelState();
+}
+
+class _TocPanelState extends State<_TocPanel> with SingleTickerProviderStateMixin {
+  late TabController _tab;
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tab.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.7,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(children: [
+        // Handle
+        Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 4),
+          child: Center(
+            child: Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFDDDDDD),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+        // Tab bar
+        TabBar(
+          controller: _tab,
+          labelColor: AppTheme.primary,
+          unselectedLabelColor: AppTheme.textTertiary,
+          indicatorColor: AppTheme.primary,
+          indicatorSize: TabBarIndicatorSize.label,
+          tabs: const [
+            Tab(text: '目录'),
+            Tab(text: '书签'),
+            Tab(text: '笔记'),
+          ],
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: TabBarView(
+            controller: _tab,
+            children: [
+              _buildTocTab(),
+              _buildBookmarksTab(),
+              _buildNotesTab(),
+            ],
+          ),
+        ),
+        SizedBox(height: bottom),
+      ]),
+    );
+  }
+
+  Widget _buildTocTab() {
+    if (widget.toc.isEmpty) {
+      return const Center(
+        child: Text('未检测到章节目录', style: TextStyle(color: AppTheme.textTertiary)),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: widget.toc.length,
+      itemBuilder: (_, i) {
+        final item = widget.toc[i];
+        final isCurrent = item.page == widget.currentPage;
+        return ListTile(
+          dense: true,
+          title: Text(
+            item.title,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+              color: isCurrent ? AppTheme.primary : AppTheme.textPrimary,
+            ),
+          ),
+          trailing: Text('第 ${item.page + 1} 页',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
+          onTap: () => widget.onJumpToPage(item.page),
+        );
+      },
+    );
+  }
+
+  Widget _buildBookmarksTab() {
+    if (widget.bookmarks.isEmpty) {
+      return const Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.bookmark_border_rounded, size: 48, color: AppTheme.textTertiary),
+          SizedBox(height: 8),
+          Text('下拉添加书签', style: TextStyle(color: AppTheme.textTertiary)),
+        ]),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: widget.bookmarks.length,
+      itemBuilder: (_, i) {
+        final bm = widget.bookmarks[i];
+        final isCurrent = bm.page == widget.currentPage;
+        return ListTile(
+          dense: true,
+          leading: Icon(Icons.bookmark_rounded,
+              color: isCurrent ? AppTheme.primary : const Color(0xFFFFBB00), size: 20),
+          title: Text(
+            bm.snippet.isEmpty ? '第 ${bm.page + 1} 页' : bm.snippet,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              color: isCurrent ? AppTheme.primary : AppTheme.textPrimary,
+            ),
+          ),
+          subtitle: Text('第 ${bm.page + 1} 页',
+              style: const TextStyle(fontSize: 11, color: AppTheme.textTertiary)),
+          trailing: IconButton(
+            icon: const Icon(Icons.delete_outline_rounded, size: 18, color: AppTheme.textTertiary),
+            onPressed: () => widget.onDeleteBookmark(bm.id!),
+          ),
+          onTap: () => widget.onJumpToPage(bm.page),
+        );
+      },
+    );
+  }
+
+  Widget _buildNotesTab() {
+    if (widget.notes.isEmpty) {
+      return const Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.edit_note_rounded, size: 48, color: AppTheme.textTertiary),
+          SizedBox(height: 8),
+          Text('长按选中文字可添加笔记', style: TextStyle(color: AppTheme.textTertiary)),
+        ]),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: widget.notes.length,
+      itemBuilder: (_, i) {
+        final note = widget.notes[i];
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8F9FA),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFE8E8E8)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Text('第 ${note.page + 1} 页',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textTertiary)),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => widget.onDeleteNote(note.id!),
+                  child: const Icon(Icons.delete_outline_rounded,
+                      size: 16, color: AppTheme.textTertiary),
+                ),
+              ]),
+              if (note.selectedText.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '"${note.selectedText}"',
+                  style: const TextStyle(
+                    fontSize: 12, color: AppTheme.textTertiary,
+                    fontStyle: FontStyle.italic,
+                  ),
+                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              const SizedBox(height: 6),
+              Text(note.noteText,
+                  style: const TextStyle(fontSize: 14, color: AppTheme.textPrimary, height: 1.4)),
+              TextButton(
+                onPressed: () => widget.onJumpToPage(note.page),
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('跳转到此页',
+                    style: TextStyle(fontSize: 11, color: AppTheme.primary)),
+              ),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _NavBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool trailingIcon;
+  final VoidCallback? onTap;
+
+  const _NavBtn({required this.icon, required this.label,
+      this.trailingIcon = false, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = onTap != null ? AppTheme.primary : AppTheme.textTertiary;
+    final children = trailingIcon
+        ? [Text(label), const SizedBox(width: 2), Icon(icon, size: 22)]
+        : [Icon(icon, size: 22), const SizedBox(width: 2), Text(label)];
+    return GestureDetector(
+      onTap: onTap,
+      child: Row(
+        children: children.map((w) => w is Text
+            ? Text(w.data!, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: color))
+            : (w is Icon ? Icon(w.icon, size: w.size, color: color) : w)).toList(),
+      ),
+    );
+  }
+}
