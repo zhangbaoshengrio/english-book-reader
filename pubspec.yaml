@@ -49,6 +49,7 @@ dependencies:
 
   # HTML rendering for dictionary content
   webview_flutter: ^4.10.0
+  flutter_markdown_plus: ^1.0.7
 
 dev_dependencies:
   flutter_test:

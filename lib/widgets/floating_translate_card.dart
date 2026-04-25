@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../services/translation_service.dart';
-import '../services/ai_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 
@@ -48,40 +48,15 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
   final Map<String, String?> _results = {};
   bool _speaking = false;
 
-  // AI analysis state
-  bool _hasAiEngine = false;
-  bool _aiExpanded = false;
-  bool _aiFetching = false;
-  String? _aiAnalysis;
-
   @override
   void initState() {
     super.initState();
     _init();
-    _checkAiEngine();
     if (widget.autoSpeak) TtsService.speak(widget.originalText);
   }
 
-  Future<void> _checkAiEngine() async {
-    final engines = await AiService.getEnabledEngines();
-    if (mounted) setState(() => _hasAiEngine = engines.isNotEmpty);
-  }
-
-  Future<void> _fetchAiAnalysis({bool reset = false}) async {
-    if (_aiFetching) return;
-    if (_aiAnalysis != null && !reset) return;
-    setState(() { _aiFetching = true; if (reset) _aiAnalysis = null; });
-    final result = await AiService.analyzeSentence(widget.originalText);
-    if (mounted) {
-      setState(() {
-        _aiAnalysis = result.isEmpty ? '分析失败，请检查 API Key 或网络连接。' : result;
-        _aiFetching = false;
-      });
-    }
-  }
-
   Future<void> _init() async {
-    final engines = await TranslationService.getEnabledEngines();
+    final engines = await TranslationService.getEnabledEnginesWithAi();
     if (!mounted) return;
     setState(() => _engines = engines);
     // Fire all requests in parallel
@@ -171,36 +146,27 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
                   child: SingleChildScrollView(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ..._engines.map((engine) {
-                          final isLast = engine == _engines.last && !_hasAiEngine;
-                          return _ResultBlock(
-                            engine: engine,
-                            translation: _results[engine.id],
-                            isStarred: widget.isStarred,
-                            isLast: isLast,
-                            onStar: widget.onStar == null ? null : () {
-                              final t = _results[engine.id] ?? '';
-                              widget.onStar!(widget.originalText, t);
-                            },
-                            onUnstar: widget.onUnstar,
-                          );
-                        }),
-                        // AI analysis section
-                        if (_hasAiEngine)
-                          _AiAnalysisSection(
-                            expanded: _aiExpanded,
-                            fetching: _aiFetching,
-                            analysis: _aiAnalysis,
-                            onToggle: () {
-                              setState(() => _aiExpanded = !_aiExpanded);
-                              if (_aiExpanded && _aiAnalysis == null) {
-                                _fetchAiAnalysis();
-                              }
-                            },
-                            onRefresh: () => _fetchAiAnalysis(reset: true),
-                          ),
-                      ],
+                      children: _engines.map((engine) {
+                        final isAi = engine.type == EngineType.aiEngine;
+                        final isLast = engine == _engines.last;
+                        return isAi
+                            ? _AiResultBlock(
+                                engine: engine,
+                                analysis: _results[engine.id],
+                                isLast: isLast,
+                              )
+                            : _ResultBlock(
+                                engine: engine,
+                                translation: _results[engine.id],
+                                isStarred: widget.isStarred,
+                                isLast: isLast,
+                                onStar: widget.onStar == null ? null : () {
+                                  final t = _results[engine.id] ?? '';
+                                  widget.onStar!(widget.originalText, t);
+                                },
+                                onUnstar: widget.onUnstar,
+                              );
+                      }).toList(),
                     ),
                   ),
                 ),
@@ -396,88 +362,72 @@ class _ResultBlock extends StatelessWidget {
   }
 }
 
-// ── AI analysis section ───────────────────────────────────────────────────────
+// ── AI result block (markdown, inline with translation results) ───────────────
 
-class _AiAnalysisSection extends StatelessWidget {
-  final bool expanded;
-  final bool fetching;
-  final String? analysis;
-  final VoidCallback onToggle;
-  final VoidCallback onRefresh;
+class _AiResultBlock extends StatelessWidget {
+  final TranslationEngine engine;
+  final String? analysis; // null = loading
+  final bool isLast;
 
-  const _AiAnalysisSection({
-    required this.expanded,
-    required this.fetching,
+  const _AiResultBlock({
+    required this.engine,
     required this.analysis,
-    required this.onToggle,
-    required this.onRefresh,
+    required this.isLast,
   });
 
   static const _aiColor = Color(0xFF10A37F);
 
+  static final _mdStyle = MarkdownStyleSheet(
+    p: const TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.65),
+    h1: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+    h2: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+    h3: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+    strong: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+    em: const TextStyle(fontStyle: FontStyle.italic, color: AppTheme.textSecondary),
+    listBullet: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+  );
+
   @override
   Widget build(BuildContext context) {
+    final loading = analysis == null;
+    final failed  = !loading && analysis!.isEmpty;
+
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
+      decoration: BoxDecoration(
+        border: isLast
+            ? null
+            : const Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
       ),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Collapsed header / toggle button
-          GestureDetector(
-            onTap: onToggle,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-              child: Row(children: [
-                const Icon(Icons.auto_awesome_rounded, size: 14, color: _aiColor),
-                const SizedBox(width: 6),
-                const Text('AI 句子分析',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _aiColor)),
-                const Spacer(),
-                if (fetching)
-                  const SizedBox(
-                    width: 14, height: 14,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 1.5, color: _aiColor),
-                  )
-                else ...[
-                  if (analysis != null)
-                    GestureDetector(
-                      onTap: onRefresh,
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Icon(Icons.refresh_rounded,
-                            size: 14,
-                            color: _aiColor.withValues(alpha: 0.6)),
-                      ),
-                    ),
-                  Icon(
-                    expanded
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.keyboard_arrow_down_rounded,
-                    size: 18,
-                    color: _aiColor,
-                  ),
-                ],
-              ]),
-            ),
-          ),
-          // Expanded content
-          if (expanded && !fetching && analysis != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-              child: Text(
-                analysis!,
-                style: const TextStyle(
-                    fontSize: 13,
-                    color: AppTheme.textPrimary,
-                    height: 1.65),
+          // Engine name tag with AI icon
+          Row(children: [
+            const Icon(Icons.auto_awesome_rounded, size: 11, color: _aiColor),
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: _aiColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
               ),
+              child: Text(engine.name,
+                  style: const TextStyle(
+                      fontSize: 10, fontWeight: FontWeight.w700, color: _aiColor)),
             ),
+          ]),
+          const SizedBox(height: 6),
+          if (loading)
+            const SizedBox(
+              width: 18, height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: _aiColor),
+            )
+          else if (failed)
+            const Text('分析失败，请检查 API Key 或网络连接。',
+                style: TextStyle(fontSize: 13, color: AppTheme.textTertiary))
+          else
+            MarkdownBody(data: analysis!, styleSheet: _mdStyle),
         ],
       ),
     );

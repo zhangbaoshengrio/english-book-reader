@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'ai_service.dart';
 
 // ── Engine type constants ─────────────────────────────────────────────────────
 
@@ -10,6 +11,7 @@ class EngineType {
   static const builtinFree = 'builtinFree'; // free unofficial endpoint
   static const officialApi = 'officialApi'; // official API with credentials
   static const customUrl   = 'customUrl';   // user-defined URL template
+  static const aiEngine    = 'aiEngine';    // AI engine (calls AiService)
 }
 
 // ── Credential field descriptor ───────────────────────────────────────────────
@@ -185,6 +187,50 @@ class TranslationService {
   static Future<List<TranslationEngine>> getEnabledEngines() async =>
       (await getEngines()).where((e) => e.enabled).toList();
 
+  /// Returns enabled translation engines + enabled AI engines (as aiEngine type),
+  /// in user-configured order (AI engines stored as virtual entries in the list).
+  static Future<List<TranslationEngine>> getEnabledEnginesWithAi() async {
+    final engines = await getEngines();
+    // Add AI engine virtual entries if not already in list
+    final aiEngines = await AiService.getEnabledEngines();
+    final result = <TranslationEngine>[];
+    for (final e in engines) {
+      if (e.enabled) result.add(e);
+    }
+    // Append enabled AI engines that aren't already represented
+    for (final ai in aiEngines) {
+      final virtualId = 'ai_${ai.id}';
+      if (!result.any((e) => e.id == virtualId)) {
+        result.add(TranslationEngine(
+          id: virtualId,
+          name: ai.name,
+          type: EngineType.aiEngine,
+          enabled: true,
+        ));
+      }
+    }
+    return result;
+  }
+
+  /// Returns all engines (translation + AI virtual entries) for the management page.
+  static Future<List<TranslationEngine>> getAllEnginesForManagement() async {
+    final engines = await getEngines();
+    final aiEngines = await AiService.getEngines();
+    final result = List<TranslationEngine>.from(engines);
+    for (final ai in aiEngines) {
+      final virtualId = 'ai_${ai.id}';
+      if (!result.any((e) => e.id == virtualId)) {
+        result.add(TranslationEngine(
+          id: virtualId,
+          name: ai.name,
+          type: EngineType.aiEngine,
+          enabled: ai.enabled && ai.apiKey.isNotEmpty,
+        ));
+      }
+    }
+    return result;
+  }
+
   /// Save credentials for an official API engine.
   static Future<void> saveCredentials(
       String engineId, Map<String, String> credentials) async {
@@ -233,6 +279,11 @@ class TranslationService {
   static Future<String> translate(String text, String engineId) async {
     if (text.trim().isEmpty) return '';
     try {
+      // AI engine virtual entry: id is 'ai_<aiEngineId>'
+      if (engineId.startsWith('ai_')) {
+        final aiId = engineId.substring(3);
+        return await AiService.query(aiId, AiPrompts.sentenceAnalysis(text));
+      }
       switch (engineId) {
         case 'google':    return await _google(text);
         case 'microsoft': return await _microsoft(text);

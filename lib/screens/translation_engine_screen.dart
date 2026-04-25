@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/ai_service.dart';
 import '../services/settings_service.dart';
 import '../services/translation_service.dart';
 import '../theme/app_theme.dart';
@@ -24,7 +25,7 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
 
   Future<void> _load() async {
     final results = await Future.wait([
-      TranslationService.getEngines(),
+      TranslationService.getAllEnginesForManagement(),
       SettingsService.getAutoTranslate(),
     ]);
     if (mounted) {
@@ -37,11 +38,28 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
   }
 
   Future<void> _save() async {
-    await TranslationService.saveEngines(_engines);
+    // Split: save translation engines (non-AI) and AI engine order/enabled state separately
+    final translationEngines = _engines.where((e) => e.type != EngineType.aiEngine).toList();
+    await TranslationService.saveEngines(translationEngines);
+    // Sync AI engine enabled state back to AiService
+    final aiEngines = await AiService.getEngines();
+    for (final e in _engines.where((e) => e.type == EngineType.aiEngine)) {
+      final aiId = e.id.substring(3); // strip 'ai_' prefix
+      final idx = aiEngines.indexWhere((a) => a.id == aiId);
+      if (idx >= 0) {
+        aiEngines[idx] = aiEngines[idx].copyWith(enabled: e.enabled);
+      }
+    }
+    await AiService.saveEngines(aiEngines);
   }
 
   void _toggleEnabled(int index, bool value) {
-    setState(() => _engines[index] = _engines[index].copyWith(enabled: value));
+    final engine = _engines[index];
+    // AI engines without API key cannot be enabled
+    if (value && engine.type == EngineType.aiEngine) {
+      // check will be done in _save via AiService; just update UI
+    }
+    setState(() => _engines[index] = engine.copyWith(enabled: value));
     _save();
   }
 
@@ -204,11 +222,12 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
                       final engine = _engines[index];
                       final isCustom = engine.type == EngineType.customUrl;
                       final isApiEngine = engine.type == EngineType.officialApi;
+                      final isAi = engine.type == EngineType.aiEngine;
                       return _EngineRow(
                         key: ValueKey(engine.id),
                         engine: engine,
                         isLast: index == _engines.length - 1,
-                        onToggle: (v) => _toggleEnabled(index, v),
+                        onToggle: isAi ? null : (v) => _toggleEnabled(index, v),
                         onConfigure: isApiEngine
                             ? () => _showCredentialSheet(engine)
                             : null,
@@ -229,7 +248,7 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
 class _EngineRow extends StatelessWidget {
   final TranslationEngine engine;
   final bool isLast;
-  final void Function(bool) onToggle;
+  final void Function(bool)? onToggle; // null for AI engines (managed via AI settings)
   final VoidCallback? onConfigure; // officialApi
   final VoidCallback? onEdit;      // customUrl
   final VoidCallback? onDelete;    // customUrl
@@ -238,7 +257,7 @@ class _EngineRow extends StatelessWidget {
     super.key,
     required this.engine,
     required this.isLast,
-    required this.onToggle,
+    this.onToggle,
     this.onConfigure,
     this.onEdit,
     this.onDelete,
@@ -291,6 +310,11 @@ class _EngineRow extends StatelessWidget {
                       color: _hasCredentials(engine)
                           ? Colors.green.shade600
                           : AppTheme.textTertiary),
+                ),
+              if (engine.type == EngineType.aiEngine)
+                const Text(
+                  '在 AI 引擎中管理开关',
+                  style: TextStyle(fontSize: 11, color: AppTheme.textTertiary),
                 ),
             ],
           ),
@@ -349,12 +373,14 @@ class _TypeTag extends StatelessWidget {
     EngineType.builtinFree: '免费',
     EngineType.officialApi: 'API',
     EngineType.customUrl:   '自定义',
+    EngineType.aiEngine:    'AI',
   };
 
   static const _colors = {
     EngineType.builtinFree: Color(0xFF34A853),
     EngineType.officialApi: Color(0xFFFF9800),
     EngineType.customUrl:   AppTheme.primary,
+    EngineType.aiEngine:    Color(0xFF10A37F),
   };
 
   @override
@@ -392,9 +418,13 @@ class _EngineBadge extends StatelessWidget {
     'tencent_api': Color(0xFF1BA784),
     'sogou_api':   Color(0xFFFF6600),
     'deepl_api':   Color(0xFF0F2B46),
+    'ai_chatgpt':  Color(0xFF10A37F),
+    'ai_gemini':   Color(0xFF4285F4),
+    'ai_deepseek': Color(0xFF1A56E8),
   };
 
-  Color get _color => _colors[engine.id] ?? AppTheme.primary;
+  Color get _color => _colors[engine.id] ??
+      (engine.type == EngineType.aiEngine ? const Color(0xFF10A37F) : AppTheme.primary);
   String get _char =>
       engine.name.isNotEmpty ? engine.name[0].toUpperCase() : '?';
 
