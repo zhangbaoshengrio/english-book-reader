@@ -7,6 +7,7 @@ import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/settings_service.dart';
 import '../theme/app_theme.dart';
+import 'ai_engine_screen.dart';
 import 'dict_manager_screen.dart';
 import 'translation_engine_screen.dart';
 import 'voice_engine_screen.dart';
@@ -170,6 +171,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               label: '翻译引擎',
               onTap: () => Navigator.push(context,
                   MaterialPageRoute(builder: (_) => const TranslationEngineScreen())),
+            ),
+            const Divider(height: 1, indent: 52, endIndent: 0),
+            _NavRow(
+              icon: Icons.auto_awesome_rounded,
+              label: 'AI 引擎',
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const AiEngineScreen())),
             ),
             const Divider(height: 1, indent: 52, endIndent: 0),
             _NavRow(

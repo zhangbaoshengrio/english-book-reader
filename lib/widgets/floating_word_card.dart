@@ -6,6 +6,7 @@ import '../models/definition.dart';
 import '../models/dict_source.dart';
 import '../services/tts_service.dart';
 import '../services/dictionary_service.dart';
+import '../services/ai_service.dart';
 import '../theme/app_theme.dart';
 import '../screens/dict_manager_screen.dart';
 
@@ -47,8 +48,62 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
   int _tab = 0;
   static String? _lastTabFilePath; // persist by filePath (stable across renames)
 
+  // AI tab state
+  bool _hasAiEngine = false;
+  String? _aiResult;       // null = not yet fetched
+  bool _aiFetching = false;
+
   /// All enabled sources to show as tabs, in order.
   List<DictSource> get _sources => widget.allSources;
+
+  // Total tabs = dict sources + (AI tab if available)
+  int get _totalTabs => _sources.length + (_hasAiEngine ? 1 : 0);
+  bool get _isAiTab => _hasAiEngine && _tab == _sources.length;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAiEngine();
+  }
+
+  Future<void> _checkAiEngine() async {
+    final engines = await AiService.getEnabledEngines();
+    if (mounted) setState(() => _hasAiEngine = engines.isNotEmpty);
+  }
+
+  Future<void> _fetchAiResult({bool reset = false}) async {
+    if (_aiFetching) return;
+    if (_aiResult != null && !reset) return;
+    setState(() { _aiFetching = true; if (reset) _aiResult = null; });
+    final result = await AiService.lookupWord(
+        widget.word, widget.sentence);
+    if (mounted) {
+      setState(() {
+        _aiResult = result.isEmpty ? '查询失败，请检查 API Key 或网络连接。' : result;
+        _aiFetching = false;
+      });
+    }
+  }
+
+  bool get _isAiResultSaved {
+    final saved = widget.savedDefinitionText ?? '';
+    if (saved.isEmpty || _aiResult == null) return false;
+    // AI result is saved if the savedDefinitionText starts with the AI prefix
+    return saved.startsWith('[AI]');
+  }
+
+  void _starAiResult() {
+    if (_aiResult == null) return;
+    // Store AI result as a Definition with a special partOfSpeech marker
+    final truncated = _aiResult!.length > 800
+        ? _aiResult!.substring(0, 800)
+        : _aiResult!;
+    widget.onStar(Definition(
+      partOfSpeech: 'AI',
+      text: '[AI] $truncated',
+      chineseText: '',
+    ));
+  }
 
   @override
   void didUpdateWidget(FloatingWordCard old) {
@@ -62,7 +117,7 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
         return;
       }
     }
-    if (_tab >= sources.length) setState(() => _tab = 0);
+    if (_tab >= _totalTabs && _totalTabs > 0) setState(() => _tab = 0);
   }
 
   void _openDictManager() {
@@ -128,11 +183,15 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
               ),
             _LogoTabBar(
               sources: sources,
+              hasAiTab: _hasAiEngine,
               selected: _tab,
               onSelect: (i) {
                 setState(() => _tab = i);
                 if (i < sources.length) {
                   _lastTabFilePath = sources[i].filePath;
+                } else {
+                  // AI tab selected — auto-fetch
+                  _fetchAiResult();
                 }
               },
               onSettings: _openDictManager,
@@ -148,6 +207,16 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
                         strokeWidth: 2, color: AppTheme.primary),
                   ),
                 ),
+              )
+            else if (_isAiTab)
+              _AiWordPanel(
+                fetching: _aiFetching,
+                result: _aiResult,
+                onFetch: _fetchAiResult,
+                onRefresh: () => _fetchAiResult(reset: true),
+                isSaved: _isAiResultSaved,
+                onStar: _starAiResult,
+                onUnstar: widget.onUnstar,
               )
             else if (sources.isEmpty)
               const Padding(
@@ -217,12 +286,14 @@ class _WordToolbar extends StatelessWidget {
 
 class _LogoTabBar extends StatelessWidget {
   final List<DictSource> sources;
+  final bool hasAiTab;
   final int selected;
   final void Function(int) onSelect;
   final VoidCallback onSettings;
 
   const _LogoTabBar({
     required this.sources,
+    required this.hasAiTab,
     required this.selected,
     required this.onSelect,
     required this.onSettings,
@@ -244,15 +315,22 @@ class _LogoTabBar extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 6),
             child: Row(
-              children: List.generate(sources.length, (i) {
-                final logo = DictLogo.of(sources[i]);
-                return _LogoTabItem(
-                  logo: logo,
-                  name: sources[i].name,
-                  active: i == selected,
-                  onTap: () => onSelect(i),
-                );
-              }),
+              children: [
+                ...List.generate(sources.length, (i) {
+                  final logo = DictLogo.of(sources[i]);
+                  return _LogoTabItem(
+                    logo: logo,
+                    name: sources[i].name,
+                    active: i == selected,
+                    onTap: () => onSelect(i),
+                  );
+                }),
+                if (hasAiTab)
+                  _AiTabItem(
+                    active: selected == sources.length,
+                    onTap: () => onSelect(sources.length),
+                  ),
+              ],
             ),
           ),
         ),
@@ -265,6 +343,44 @@ class _LogoTabBar extends StatelessWidget {
           ),
         ),
       ]),
+    );
+  }
+}
+
+class _AiTabItem extends StatelessWidget {
+  final bool active;
+  final VoidCallback onTap;
+
+  const _AiTabItem({required this.active, required this.onTap});
+
+  static const _aiColor = Color(0xFF10A37F); // AI green
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: active ? _aiColor : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: active
+              ? null
+              : Border.all(color: _aiColor.withValues(alpha: 0.35), width: 1.5),
+        ),
+        child: Center(
+          child: Text(
+            'AI',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: active ? Colors.white : _aiColor,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -864,6 +980,120 @@ class _ExampleRowState extends State<_ExampleRow> {
                     height: 1.4)),
           ),
       ]),
+    );
+  }
+}
+
+// ── AI word panel ──────────────────────────────────────────────────────────────
+
+class _AiWordPanel extends StatelessWidget {
+  final bool fetching;
+  final String? result;
+  final VoidCallback onFetch;
+  final VoidCallback onRefresh;
+  final bool isSaved;
+  final VoidCallback onStar;
+  final VoidCallback onUnstar;
+
+  const _AiWordPanel({
+    required this.fetching,
+    required this.result,
+    required this.onFetch,
+    required this.onRefresh,
+    required this.isSaved,
+    required this.onStar,
+    required this.onUnstar,
+  });
+
+  static const _aiColor = Color(0xFF10A37F);
+
+  @override
+  Widget build(BuildContext context) {
+    if (fetching) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+          child: SizedBox(
+            width: 22, height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _aiColor),
+          ),
+        ),
+      );
+    }
+
+    if (result == null) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+        child: GestureDetector(
+          onTap: onFetch,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: _aiColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _aiColor.withValues(alpha: 0.25)),
+            ),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.auto_awesome_rounded, size: 16, color: _aiColor),
+              const SizedBox(width: 6),
+              Text('AI 智能释义',
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: _aiColor,
+                      fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.36),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.auto_awesome_rounded, size: 13, color: _aiColor),
+              const SizedBox(width: 4),
+              Text('AI 释义',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: _aiColor,
+                      fontWeight: FontWeight.w700)),
+              const Spacer(),
+              GestureDetector(
+                onTap: onRefresh,
+                child: Text('重新查询',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: _aiColor.withValues(alpha: 0.7),
+                        fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(width: 10),
+              // Star button
+              GestureDetector(
+                onTap: isSaved ? onUnstar : onStar,
+                child: Icon(
+                  isSaved ? Icons.star_rounded : Icons.star_border_rounded,
+                  size: 22,
+                  color: isSaved
+                      ? const Color(0xFFFFBB00)
+                      : AppTheme.textTertiary,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Text(result!,
+                style: const TextStyle(
+                    fontSize: 14,
+                    color: AppTheme.textPrimary,
+                    height: 1.6)),
+          ],
+        ),
+      ),
     );
   }
 }
