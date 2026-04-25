@@ -224,13 +224,18 @@ class _ConfigSheet extends StatefulWidget {
 
 class _ConfigSheetState extends State<_ConfigSheet> {
   late final TextEditingController _keyCtrl;
+  late final TextEditingController _baseUrlCtrl;
   late String _selectedModel;
   bool _obscureKey = true;
+  // Test connection state: null=idle, true=testing, false=done
+  bool _testing = false;
+  String? _testResult; // null=not tested, '' = success msg, starts with '✗'=fail
 
   @override
   void initState() {
     super.initState();
     _keyCtrl = TextEditingController(text: widget.engine.apiKey);
+    _baseUrlCtrl = TextEditingController(text: widget.engine.baseUrl);
     final models = AiEngine.modelOptions[widget.engine.id];
     _selectedModel = widget.engine.model.isNotEmpty
         ? widget.engine.model
@@ -240,7 +245,42 @@ class _ConfigSheetState extends State<_ConfigSheet> {
   @override
   void dispose() {
     _keyCtrl.dispose();
+    _baseUrlCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _testConnection() async {
+    final key = _keyCtrl.text.trim();
+    if (key.isEmpty) {
+      setState(() => _testResult = '✗ 请先填写 API Key');
+      return;
+    }
+    setState(() { _testing = true; _testResult = null; });
+    try {
+      final tmpEngine = widget.engine.copyWith(
+        apiKey: key,
+        model: _selectedModel,
+        enabled: true,
+      );
+      await AiService.saveEngine(tmpEngine);
+      final result = await AiService.query(
+        widget.engine.id,
+        'Reply with exactly one word: OK',
+      );
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testResult = result.isNotEmpty ? '✓ 连接成功' : '✗ 无响应，请检查 API Key 或网络';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testResult = '✗ 连接失败：$e';
+        });
+      }
+    }
   }
 
   @override
@@ -257,6 +297,8 @@ class _ConfigSheetState extends State<_ConfigSheet> {
       filled: true,
       fillColor: Color(0xFFF8F8F8),
     );
+
+    final testSuccess = _testResult != null && !_testResult!.startsWith('✗');
 
     return Container(
       decoration: const BoxDecoration(
@@ -352,6 +394,55 @@ class _ConfigSheetState extends State<_ConfigSheet> {
               const SizedBox(height: 6),
             ],
 
+            // Base URL field (for relay/proxy endpoints)
+            if (widget.engine.id == 'chatgpt') ...[
+              const Text('API Base URL（中转地址，留空使用官方）', style: labelStyle),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _baseUrlCtrl,
+                style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                decoration: dec.copyWith(
+                  hintText: 'https://api.openai.com/v1/chat/completions',
+                ),
+                keyboardType: TextInputType.url,
+              ),
+              const SizedBox(height: 14),
+            ],
+
+            // Test connection button + result
+            Row(children: [
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.primary,
+                  side: const BorderSide(color: AppTheme.primary),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: _testing ? null : _testConnection,
+                icon: _testing
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: AppTheme.primary))
+                    : const Icon(Icons.wifi_tethering_rounded, size: 16),
+                label: Text(_testing ? '测试中…' : '测试连接',
+                    style: const TextStyle(fontSize: 14)),
+              ),
+              const SizedBox(width: 12),
+              if (_testResult != null)
+                Expanded(
+                  child: Text(
+                    _testResult!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: testSuccess ? Colors.green.shade600 : Colors.red.shade600,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+            ]),
+
             const SizedBox(height: 14),
 
             // Save button
@@ -368,7 +459,7 @@ class _ConfigSheetState extends State<_ConfigSheet> {
                   final updated = widget.engine.copyWith(
                     apiKey: _keyCtrl.text.trim(),
                     model: _selectedModel,
-                    // Enable automatically when key is set
+                    baseUrl: _baseUrlCtrl.text.trim(),
                     enabled: _keyCtrl.text.trim().isNotEmpty
                         ? widget.engine.enabled
                         : false,

@@ -200,7 +200,9 @@ class AiService {
             prompt: prompt,
             apiKey: engine.apiKey,
             model: engine.model.isNotEmpty ? engine.model : 'gpt-4o-mini',
-            baseUrl: 'https://api.openai.com/v1/chat/completions',
+            baseUrl: engine.baseUrl.isNotEmpty
+                ? engine.baseUrl
+                : 'https://api.openai.com/v1/chat/completions',
           );
         case 'gemini':
           return await _callGemini(

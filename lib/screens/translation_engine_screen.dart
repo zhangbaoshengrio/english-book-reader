@@ -419,7 +419,7 @@ class _EngineBadge extends StatelessWidget {
 
 // ── Credential config sheet ────────────────────────────────────────────────────
 
-class _CredentialSheet extends StatelessWidget {
+class _CredentialSheet extends StatefulWidget {
   final TranslationEngine engine;
   final List<CredentialField> fields;
   final Map<String, TextEditingController> controllers;
@@ -431,6 +431,48 @@ class _CredentialSheet extends StatelessWidget {
     required this.controllers,
     required this.onSave,
   });
+
+  @override
+  State<_CredentialSheet> createState() => _CredentialSheetState();
+}
+
+class _CredentialSheetState extends State<_CredentialSheet> {
+  bool _testing = false;
+  String? _testResult;
+
+  Future<void> _testConnection() async {
+    // Check all fields filled
+    final anyEmpty = widget.fields.any(
+      (f) => (widget.controllers[f.key]?.text.trim() ?? '').isEmpty,
+    );
+    if (anyEmpty) {
+      setState(() => _testResult = '✗ 请先填写所有凭据字段');
+      return;
+    }
+    setState(() { _testing = true; _testResult = null; });
+    try {
+      // Save credentials temporarily so translate() can pick them up
+      final creds = {
+        for (final f in widget.fields)
+          f.key: widget.controllers[f.key]!.text.trim(),
+      };
+      await TranslationService.saveCredentials(widget.engine.id, creds);
+      final result = await TranslationService.translate('hello', widget.engine.id);
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testResult = result.isNotEmpty ? '✓ 连接成功' : '✗ 无响应，请检查凭据或网络';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testResult = '✗ 连接失败：$e';
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -445,6 +487,8 @@ class _CredentialSheet extends StatelessWidget {
       filled: true,
       fillColor: Color(0xFFF8F8F8),
     );
+
+    final testSuccess = _testResult != null && !_testResult!.startsWith('✗');
 
     return Container(
       decoration: const BoxDecoration(
@@ -468,7 +512,7 @@ class _CredentialSheet extends StatelessWidget {
               ),
             ),
             Row(children: [
-              Text('配置 ${engine.name}',
+              Text('配置 ${widget.engine.name}',
                   style: const TextStyle(
                       fontSize: 17, fontWeight: FontWeight.w700)),
               const Spacer(),
@@ -480,15 +524,15 @@ class _CredentialSheet extends StatelessWidget {
             ]),
             const SizedBox(height: 6),
             Text(
-              _apiDocHint(engine.id),
+              _apiDocHint(widget.engine.id),
               style: const TextStyle(fontSize: 12, color: AppTheme.textTertiary),
             ),
             const SizedBox(height: 20),
-            for (final field in fields) ...[
+            for (final field in widget.fields) ...[
               Text(field.label, style: labelStyle),
               const SizedBox(height: 6),
               TextField(
-                controller: controllers[field.key],
+                controller: widget.controllers[field.key],
                 decoration: dec.copyWith(hintText: field.hint),
                 style: const TextStyle(fontSize: 14),
                 obscureText: field.key.toLowerCase().contains('secret') ||
@@ -496,7 +540,42 @@ class _CredentialSheet extends StatelessWidget {
               ),
               const SizedBox(height: 14),
             ],
-            const SizedBox(height: 6),
+            // Test connection button + result
+            Row(children: [
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.primary,
+                  side: const BorderSide(color: AppTheme.primary),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: _testing ? null : _testConnection,
+                icon: _testing
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: AppTheme.primary))
+                    : const Icon(Icons.wifi_tethering_rounded, size: 16),
+                label: Text(_testing ? '测试中…' : '测试连接',
+                    style: const TextStyle(fontSize: 14)),
+              ),
+              const SizedBox(width: 12),
+              if (_testResult != null)
+                Expanded(
+                  child: Text(
+                    _testResult!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: testSuccess
+                          ? Colors.green.shade600
+                          : Colors.red.shade600,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+            ]),
+            const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
               child: FilledButton(
@@ -506,7 +585,7 @@ class _CredentialSheet extends StatelessWidget {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10)),
                 ),
-                onPressed: onSave,
+                onPressed: widget.onSave,
                 child: const Text('保存',
                     style: TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w600)),
@@ -538,7 +617,7 @@ class _CredentialSheet extends StatelessWidget {
 
 // ── Add / edit custom URL engine sheet ────────────────────────────────────────
 
-class _AddEngineSheet extends StatelessWidget {
+class _AddEngineSheet extends StatefulWidget {
   final TextEditingController nameCtrl;
   final TextEditingController urlCtrl;
   final TextEditingController jsonPathCtrl;
@@ -554,6 +633,62 @@ class _AddEngineSheet extends StatelessWidget {
   });
 
   @override
+  State<_AddEngineSheet> createState() => _AddEngineSheetState();
+}
+
+class _AddEngineSheetState extends State<_AddEngineSheet> {
+  bool _testing = false;
+  String? _testResult;
+
+  Future<void> _testConnection() async {
+    final url = widget.urlCtrl.text.trim();
+    if (url.isEmpty) {
+      setState(() => _testResult = '✗ 请先填写请求 URL');
+      return;
+    }
+    if (!url.contains('{text}')) {
+      setState(() => _testResult = '✗ URL 中需包含 {text} 占位符');
+      return;
+    }
+    setState(() { _testing = true; _testResult = null; });
+    try {
+      // Build a temporary engine and test it
+      final tmpEngine = TranslationEngine(
+        id: '__test__',
+        name: widget.nameCtrl.text.trim().isNotEmpty
+            ? widget.nameCtrl.text.trim()
+            : '测试',
+        type: EngineType.customUrl,
+        urlTemplate: url,
+        jsonPath: widget.jsonPathCtrl.text.trim(),
+      );
+      await TranslationService.saveCustomEngine(
+        id: '__test__',
+        name: tmpEngine.name,
+        urlTemplate: tmpEngine.urlTemplate,
+        jsonPath: tmpEngine.jsonPath,
+      );
+      final result = await TranslationService.translate('hello', '__test__');
+      // Clean up temp engine
+      await TranslationService.deleteEngine('__test__');
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testResult = result.isNotEmpty ? '✓ 连接成功' : '✗ 无响应，请检查 URL 或 JSON 路径';
+        });
+      }
+    } catch (e) {
+      await TranslationService.deleteEngine('__test__');
+      if (mounted) {
+        setState(() {
+          _testing = false;
+          _testResult = '✗ 连接失败：$e';
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     const labelStyle = TextStyle(
         fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600);
@@ -566,6 +701,8 @@ class _AddEngineSheet extends StatelessWidget {
       filled: true,
       fillColor: Color(0xFFF8F8F8),
     );
+
+    final testSuccess = _testResult != null && !_testResult!.startsWith('✗');
 
     return Container(
       decoration: const BoxDecoration(
@@ -589,7 +726,7 @@ class _AddEngineSheet extends StatelessWidget {
               ),
             ),
             Row(children: [
-              Text(isEditing ? '编辑引擎' : '添加自定义引擎',
+              Text(widget.isEditing ? '编辑引擎' : '添加自定义引擎',
                   style: const TextStyle(
                       fontSize: 17, fontWeight: FontWeight.w700)),
               const Spacer(),
@@ -604,7 +741,7 @@ class _AddEngineSheet extends StatelessWidget {
             const Text('引擎名称', style: labelStyle),
             const SizedBox(height: 6),
             TextField(
-                controller: nameCtrl,
+                controller: widget.nameCtrl,
                 decoration: dec.copyWith(hintText: '如 DeepL Free'),
                 style: const TextStyle(fontSize: 14)),
             const SizedBox(height: 14),
@@ -612,7 +749,7 @@ class _AddEngineSheet extends StatelessWidget {
             const Text('请求 URL（{text} 为待翻译内容占位符）', style: labelStyle),
             const SizedBox(height: 6),
             TextField(
-              controller: urlCtrl,
+              controller: widget.urlCtrl,
               decoration: dec.copyWith(
                   hintText: 'https://api.example.com/translate?q={text}'),
               style: const TextStyle(fontSize: 13),
@@ -624,14 +761,51 @@ class _AddEngineSheet extends StatelessWidget {
             const Text('JSON 响应路径（留空则使用响应体全文）', style: labelStyle),
             const SizedBox(height: 6),
             TextField(
-              controller: jsonPathCtrl,
+              controller: widget.jsonPathCtrl,
               decoration: dec.copyWith(hintText: 'responseData.translatedText'),
               style: const TextStyle(fontSize: 14),
             ),
             const SizedBox(height: 6),
             const Text('用点号分隔多层路径，如 data.translations.0.text',
                 style: TextStyle(fontSize: 11, color: AppTheme.textTertiary)),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
+
+            // Test connection button + result
+            Row(children: [
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.primary,
+                  side: const BorderSide(color: AppTheme.primary),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: _testing ? null : _testConnection,
+                icon: _testing
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: AppTheme.primary))
+                    : const Icon(Icons.wifi_tethering_rounded, size: 16),
+                label: Text(_testing ? '测试中…' : '测试连接',
+                    style: const TextStyle(fontSize: 14)),
+              ),
+              const SizedBox(width: 12),
+              if (_testResult != null)
+                Expanded(
+                  child: Text(
+                    _testResult!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: testSuccess
+                          ? Colors.green.shade600
+                          : Colors.red.shade600,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+            ]),
+            const SizedBox(height: 14),
 
             SizedBox(
               width: double.infinity,
@@ -642,8 +816,8 @@ class _AddEngineSheet extends StatelessWidget {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10)),
                 ),
-                onPressed: onSave,
-                child: Text(isEditing ? '保存' : '添加',
+                onPressed: widget.onSave,
+                child: Text(widget.isEditing ? '保存' : '添加',
                     style: const TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w600)),
               ),
