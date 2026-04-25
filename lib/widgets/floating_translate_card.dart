@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../services/dictionary_service.dart';
+import '../services/settings_service.dart';
+import '../services/translation_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 
@@ -41,27 +42,49 @@ class FloatingTranslateCard extends StatefulWidget {
 class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
   String? _translation;
   bool _loading = true;
-
   bool _speaking = false;
+
+  List<TranslationEngine> _engines = TranslationService.builtinEngines;
+  String _activeEngineId = 'google';
 
   @override
   void initState() {
     super.initState();
-    _fetch();
+    _init();
     if (widget.autoSpeak) {
       TtsService.speak(widget.originalText);
     }
+  }
+
+  Future<void> _init() async {
+    final engines    = await TranslationService.getAllEngines();
+    final engineId   = await SettingsService.getTranslationEngine();
+    final activeId   = engines.any((e) => e.id == engineId) ? engineId : engines.first.id;
+    if (mounted) {
+      setState(() {
+        _engines = engines;
+        _activeEngineId = activeId;
+      });
+    }
+    await _fetch(activeId);
+  }
+
+  Future<void> _fetch(String engineId) async {
+    if (mounted) setState(() { _loading = true; _translation = null; });
+    final result = await TranslationService.translate(widget.originalText, engineId);
+    if (mounted) setState(() { _translation = result; _loading = false; });
+  }
+
+  Future<void> _switchEngine(String engineId) async {
+    await SettingsService.setTranslationEngine(engineId);
+    setState(() => _activeEngineId = engineId);
+    await _fetch(engineId);
   }
 
   Future<void> _speak() async {
     setState(() => _speaking = true);
     await TtsService.speak(widget.originalText);
     if (mounted) setState(() => _speaking = false);
-  }
-
-  Future<void> _fetch() async {
-    final r = await DictionaryService.translateSentence(widget.originalText);
-    if (mounted) setState(() { _translation = r; _loading = false; });
   }
 
   @override
@@ -161,9 +184,9 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
               ),
             ),
             const Divider(height: 1, indent: 14, endIndent: 14, color: Color(0xFFEEEEEE)),
-            // Translation
+            // Translation result
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
               child: _loading
                   ? const Center(
                       child: Padding(
@@ -178,7 +201,7 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
                         child: Text(
                           (_translation?.isNotEmpty == true)
                               ? _translation!
-                              : '翻译失败，请检查网络',
+                              : '翻译失败，请检查网络或切换引擎',
                           style: const TextStyle(
                               fontSize: 14,
                               color: Color(0xFF1A7A1A),
@@ -187,12 +210,80 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
                       ),
                     ),
             ),
+            // Engine selector
+            if (_engines.length > 1)
+              _EngineSelector(
+                engines: _engines,
+                activeId: _activeEngineId,
+                onSwitch: _switchEngine,
+              ),
           ],
         ),
       ),
     );
   }
 }
+
+// ── Engine selector row ────────────────────────────────────────────────────────
+
+class _EngineSelector extends StatelessWidget {
+  final List<TranslationEngine> engines;
+  final String activeId;
+  final void Function(String id) onSwitch;
+
+  const _EngineSelector({
+    required this.engines,
+    required this.activeId,
+    required this.onSwitch,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
+      ),
+      child: Row(
+        children: [
+          const Text('引擎',
+              style: TextStyle(fontSize: 11, color: AppTheme.textTertiary)),
+          const SizedBox(width: 8),
+          ...engines.map((e) => Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: GestureDetector(
+              onTap: activeId == e.id ? null : () => onSwitch(e.id),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: activeId == e.id
+                      ? AppTheme.primary.withValues(alpha: 0.12)
+                      : const Color(0xFFF0F0F0),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: activeId == e.id ? AppTheme.primary : Colors.transparent,
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  e.name,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: activeId == e.id ? FontWeight.w700 : FontWeight.w400,
+                    color: activeId == e.id ? AppTheme.primary : AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Toolbar row ───────────────────────────────────────────────────────────────
 
 class _TranslateToolbar extends StatelessWidget {
   final String text;

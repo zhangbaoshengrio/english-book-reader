@@ -57,6 +57,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // Settings
   bool   _autoSpeak     = false;
+  bool   _autoTranslate = true;
   double _fontSize      = 18;
   double _lineHeight    = 1.9;
   double _margin        = 22;
@@ -104,6 +105,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       SettingsService.getMargin(),
       SettingsService.getPageTurnStyle(),
       SettingsService.getScrollOffset(bookId),
+      SettingsService.getAutoTranslate(),
     ]);
     if (!mounted) return;
     final style = results[6] as String;
@@ -115,6 +117,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _fontFamily    = results[4] as String;
       _margin        = results[5] as double;
       _pageTurnStyle = style;
+      _autoTranslate = results[8] as bool;
     });
     // Restore scroll position in continuous scroll mode.
     if (style == PageTurnStyle.scroll) {
@@ -823,6 +826,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         lineHeight: _lineHeight,
         textColor: _textColor,
         fontFamily: _fontFamily,
+        autoTranslate: _autoTranslate,
         onWordTap: (word, globalPos) {
           _tapPos = globalPos;
           _onWordTap(word, text, paraKey);
@@ -935,6 +939,7 @@ class _ReaderParagraph extends StatefulWidget {
   final double lineHeight;
   final Color textColor;
   final String fontFamily;
+  final bool autoTranslate;
   final void Function(String word, Offset globalPos) onWordTap;
   final void Function(String selectedText, Offset globalPos) onTranslate;
   final void Function(_SelectionAction action, String selectedText) onSelectionAction;
@@ -948,6 +953,7 @@ class _ReaderParagraph extends StatefulWidget {
     required this.lineHeight,
     required this.textColor,
     required this.fontFamily,
+    this.autoTranslate = true,
     required this.onWordTap,
     required this.onTranslate,
     required this.onSelectionAction,
@@ -986,7 +992,8 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     final isExactWord = _wordRanges.any((r) => r.$1 == sel.start && r.$2 == sel.end);
     if (isExactWord) return;
 
-    // Multi-word: debounce 400ms
+    // Multi-word: debounce 400ms (only when autoTranslate is enabled)
+    if (!widget.autoTranslate) return;
     _translateTimer?.cancel();
     _translateTimer = Timer(const Duration(milliseconds: 400), () {
       if (!mounted) return;

@@ -21,6 +21,13 @@ class SettingsService {
   static const _marginKey        = 'reader_margin';
   static const _pageTurnStyleKey = 'page_turn_style';
 
+  // Translation
+  static const _autoTranslateKey            = 'auto_translate_on_select';
+  static const _translationEngineKey        = 'translation_engine';
+  static const _customTranslationNameKey    = 'custom_translation_name';
+  static const _customTranslationUrlKey     = 'custom_translation_url';
+  static const _customTranslationJsonPathKey = 'custom_translation_json_path';
+
   // ── Auto-speak ────────────────────────────────────────────────────────────
   static Future<bool> getAutoSpeak() async {
     final p = await SharedPreferences.getInstance();
@@ -99,6 +106,52 @@ class SettingsService {
   static Future<void> setPageTurnStyle(String v) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_pageTurnStyleKey, v);
+  }
+
+  // ── Translation ───────────────────────────────────────────────────────────
+  static Future<bool> getAutoTranslate() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getBool(_autoTranslateKey) ?? true; // default ON
+  }
+  static Future<void> setAutoTranslate(bool v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_autoTranslateKey, v);
+  }
+
+  static Future<String> getTranslationEngine() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_translationEngineKey) ?? 'google';
+  }
+  static Future<void> setTranslationEngine(String v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_translationEngineKey, v);
+  }
+
+  static Future<String> getCustomTranslationName() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_customTranslationNameKey) ?? '';
+  }
+  static Future<void> setCustomTranslationName(String v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_customTranslationNameKey, v);
+  }
+
+  static Future<String> getCustomTranslationUrl() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_customTranslationUrlKey) ?? '';
+  }
+  static Future<void> setCustomTranslationUrl(String v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_customTranslationUrlKey, v);
+  }
+
+  static Future<String> getCustomTranslationJsonPath() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_customTranslationJsonPathKey) ?? '';
+  }
+  static Future<void> setCustomTranslationJsonPath(String v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_customTranslationJsonPathKey, v);
   }
 
   // ── Per-book scroll offset (for continuous scroll mode) ───────────────────

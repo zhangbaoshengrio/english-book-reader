@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/settings_service.dart';
+import '../services/translation_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 import 'dict_manager_screen.dart';
@@ -28,10 +29,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _fontFamily    = 'Georgia';
   String _pageTurnStyle = PageTurnStyle.scroll;
 
+  // Translation
+  bool   _autoTranslate     = true;
+  String _translationEngine = 'google';
+  // Custom engine fields
+  final _customNameCtrl     = TextEditingController();
+  final _customUrlCtrl      = TextEditingController();
+  final _customJsonPathCtrl = TextEditingController();
+  bool _showCustomForm = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _customNameCtrl.dispose();
+    _customUrlCtrl.dispose();
+    _customJsonPathCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -44,17 +62,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       SettingsService.getFontFamily(),
       SettingsService.getMargin(),
       SettingsService.getPageTurnStyle(),
+      SettingsService.getAutoTranslate(),
+      SettingsService.getTranslationEngine(),
+      SettingsService.getCustomTranslationName(),
+      SettingsService.getCustomTranslationUrl(),
+      SettingsService.getCustomTranslationJsonPath(),
     ]);
     if (!mounted) return;
     setState(() {
-      _autoSpeak     = results[0] as bool;
-      _fontSize      = results[1] as double;
-      _lineHeight    = results[2] as double;
-      _ttsSpeed      = results[3] as double;
-      _theme         = results[4] as String;
-      _fontFamily    = results[5] as String;
-      _margin        = results[6] as double;
-      _pageTurnStyle = results[7] as String;
+      _autoSpeak        = results[0] as bool;
+      _fontSize         = results[1] as double;
+      _lineHeight       = results[2] as double;
+      _ttsSpeed         = results[3] as double;
+      _theme            = results[4] as String;
+      _fontFamily       = results[5] as String;
+      _margin           = results[6] as double;
+      _pageTurnStyle    = results[7] as String;
+      _autoTranslate    = results[8] as bool;
+      _translationEngine = results[9] as String;
+      _customNameCtrl.text     = results[10] as String;
+      _customUrlCtrl.text      = results[11] as String;
+      _customJsonPathCtrl.text = results[12] as String;
+      _showCustomForm = _translationEngine == 'custom';
     });
   }
 
@@ -191,6 +220,74 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SettingsService.setTtsSpeed(v);
                 TtsService.setSpeed(v);
               },
+            ),
+          ]),
+
+          // ── 翻译 ─────────────────────────────────────────────────────────────
+          _SectionHeader('翻译'),
+          _Card(children: [
+            SwitchListTile(
+              title: const Text('选句自动翻译', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+              subtitle: const Text('划选文字后自动弹出翻译', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              value: _autoTranslate,
+              activeTrackColor: AppTheme.primary.withValues(alpha: 0.4),
+              activeThumbColor: AppTheme.primary,
+              onChanged: (v) {
+                setState(() => _autoTranslate = v);
+                SettingsService.setAutoTranslate(v);
+              },
+            ),
+            const Divider(height: 1, indent: 16, endIndent: 16),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('翻译引擎', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ...TranslationService.builtinEngines.map((e) => _EngineChip(
+                        label: e.name,
+                        selected: _translationEngine == e.id,
+                        onTap: () {
+                          setState(() {
+                            _translationEngine = e.id;
+                            _showCustomForm = false;
+                          });
+                          SettingsService.setTranslationEngine(e.id);
+                        },
+                      )),
+                      _EngineChip(
+                        label: '自定义',
+                        selected: _translationEngine == 'custom',
+                        onTap: () {
+                          setState(() {
+                            _translationEngine = 'custom';
+                            _showCustomForm = true;
+                          });
+                          SettingsService.setTranslationEngine('custom');
+                        },
+                      ),
+                    ],
+                  ),
+                  if (_showCustomForm) ...[
+                    const SizedBox(height: 12),
+                    _CustomEngineForm(
+                      nameCtrl: _customNameCtrl,
+                      urlCtrl: _customUrlCtrl,
+                      jsonPathCtrl: _customJsonPathCtrl,
+                      onSave: () {
+                        SettingsService.setCustomTranslationName(_customNameCtrl.text.trim());
+                        SettingsService.setCustomTranslationUrl(_customUrlCtrl.text.trim());
+                        SettingsService.setCustomTranslationJsonPath(_customJsonPathCtrl.text.trim());
+                        _snack('自定义引擎已保存');
+                      },
+                    ),
+                  ],
+                ],
+              ),
             ),
           ]),
 
@@ -565,6 +662,119 @@ class _NavRow extends StatelessWidget {
       trailing: const Icon(Icons.chevron_right_rounded,
           color: AppTheme.textTertiary, size: 20),
       onTap: onTap,
+    );
+  }
+}
+
+class _EngineChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _EngineChip({required this.label, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.primary.withValues(alpha: 0.1) : const Color(0xFFF0F0F0),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? AppTheme.primary : Colors.transparent,
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+            color: selected ? AppTheme.primary : AppTheme.textSecondary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CustomEngineForm extends StatelessWidget {
+  final TextEditingController nameCtrl;
+  final TextEditingController urlCtrl;
+  final TextEditingController jsonPathCtrl;
+  final VoidCallback onSave;
+
+  const _CustomEngineForm({
+    required this.nameCtrl,
+    required this.urlCtrl,
+    required this.jsonPathCtrl,
+    required this.onSave,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const labelStyle = TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w500);
+    const inputDecoration = InputDecoration(
+      isDense: true,
+      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: AppTheme.primary)),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8F8F8),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFEEEEEE)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('引擎名称', style: labelStyle),
+              const SizedBox(height: 4),
+              TextField(controller: nameCtrl, decoration: inputDecoration,
+                  style: const TextStyle(fontSize: 13)),
+              const SizedBox(height: 10),
+              const Text('请求 URL（用 {text} 代替待翻译内容）', style: labelStyle),
+              const SizedBox(height: 4),
+              TextField(controller: urlCtrl, decoration: inputDecoration,
+                  style: const TextStyle(fontSize: 12),
+                  maxLines: 2,
+                  keyboardType: TextInputType.url),
+              const SizedBox(height: 6),
+              const Text('示例：https://api.example.com/translate?q={text}&source=en&target=zh',
+                  style: TextStyle(fontSize: 11, color: AppTheme.textTertiary)),
+              const SizedBox(height: 10),
+              const Text('JSON 路径（留空则使用响应体全文）', style: labelStyle),
+              const SizedBox(height: 4),
+              TextField(controller: jsonPathCtrl, decoration: inputDecoration,
+                  style: const TextStyle(fontSize: 13)),
+              const SizedBox(height: 6),
+              const Text('示例：responseData.translatedText',
+                  style: TextStyle(fontSize: 11, color: AppTheme.textTertiary)),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: onSave,
+                  child: const Text('保存', style: TextStyle(fontSize: 14)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

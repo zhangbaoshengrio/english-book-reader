@@ -8,6 +8,8 @@ import 'package:sqflite/sqflite.dart';
 import '../models/definition.dart';
 import 'database_service.dart';
 import 'mdx_service.dart';
+import 'settings_service.dart';
+import 'translation_service.dart';
 
 class DictionaryService {
   static Future<WordLookupResult> lookup(String word) async {
@@ -117,24 +119,10 @@ class DictionaryService {
     );
   }
 
-  /// Translate an arbitrary sentence/text to Chinese.
+  /// Translate an arbitrary sentence/text to Chinese using the active engine.
   static Future<String> translateSentence(String text) async {
-    try {
-      final uri = Uri.parse(
-          'https://translate.googleapis.com/translate_a/single'
-          '?client=gtx&sl=en&tl=zh-CN&dt=t&q=${Uri.encodeComponent(text)}');
-      final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body) as List;
-        final sb = StringBuffer();
-        for (final chunk in (data[0] as List)) {
-          final t = chunk[0];
-          if (t is String) sb.write(t);
-        }
-        return sb.toString();
-      }
-    } catch (_) {}
-    return '';
+    final engineId = await SettingsService.getTranslationEngine();
+    return TranslationService.translate(text, engineId);
   }
 
   // ── Custom dicts ──────────────────────────────────────────────────────────
@@ -225,17 +213,9 @@ class DictionaryService {
   // ── Network helpers ───────────────────────────────────────────────────────
 
   static Future<String> _fetchChineseTranslation(String word) async {
-    try {
-      final uri = Uri.parse(
-          'https://translate.googleapis.com/translate_a/single'
-          '?client=gtx&sl=en&tl=zh-CN&dt=t&q=${Uri.encodeComponent(word)}');
-      final resp = await http.get(uri).timeout(const Duration(seconds: 6));
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body) as List;
-        final translation = data[0][0][0] as String;
-        if (translation.toLowerCase() != word.toLowerCase()) return translation;
-      }
-    } catch (_) {}
+    // Always use Google for single-word Chinese lookup (for definition cards).
+    final result = await TranslationService.translate(word, 'google');
+    if (result.toLowerCase() != word.toLowerCase()) return result;
     return '';
   }
 
