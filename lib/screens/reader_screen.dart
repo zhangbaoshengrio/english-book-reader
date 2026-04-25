@@ -327,7 +327,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       left = left.clamp(8.0, size.width - cardW - 8.0);
       final topPad = MediaQuery.of(ctx).padding.top;
       final botPad = MediaQuery.of(ctx).padding.bottom;
-      const estCardH = 360.0;
+      // Card limits itself to 75% of usable screen height
+      final estCardH = (size.height - topPad - botPad) * 0.75;
       final spaceAbove = _tapPos.dy - 24 - topPad - 8;
       final spaceBelow = size.height - botPad - 8 - (_tapPos.dy + 32);
       double top;
@@ -836,6 +837,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
           _tapPos = globalPos;
           _showTranslateOverlay(selectedText, paraText: text);
         },
+        onDoubleTap: (sentence, globalPos) {
+          _tapPos = globalPos;
+          _showTranslateOverlay(sentence, paraText: text);
+        },
         onSelectionAction: (action, selectedText) =>
             _onSelectionAction(action, selectedText),
         onTapOutside: () {},
@@ -945,6 +950,7 @@ class _ReaderParagraph extends StatefulWidget {
   final void Function(String selectedText, Offset globalPos) onTranslate;
   final void Function(_SelectionAction action, String selectedText) onSelectionAction;
   final VoidCallback onTapOutside;
+  final void Function(String sentence, Offset globalPos)? onDoubleTap;
 
   const _ReaderParagraph({
     super.key,
@@ -959,6 +965,7 @@ class _ReaderParagraph extends StatefulWidget {
     required this.onTranslate,
     required this.onSelectionAction,
     required this.onTapOutside,
+    this.onDoubleTap,
   });
 
   @override
@@ -973,6 +980,8 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   Timer? _suppressOutsideTimer;
   bool _suppressListener = false;
   bool _suppressOutside = false;
+  DateTime? _lastTapTime;
+  int? _lastTapOffset;
   @override
   void initState() {
     super.initState();
@@ -1071,6 +1080,48 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     if (_focusNode.hasFocus) _focusNode.unfocus();
   }
 
+  /// Returns the [start, end) char range of the sentence containing [charOffset].
+  static (int, int) _sentenceBoundsAt(String text, int charOffset) {
+    final boundaries = <int>[0];
+    final re = RegExp(r'[.!?]+(?:\s|$)');
+    for (final m in re.allMatches(text)) {
+      boundaries.add(m.end);
+    }
+    boundaries.add(text.length);
+
+    for (int i = 0; i < boundaries.length - 1; i++) {
+      final s = boundaries[i];
+      final e = boundaries[i + 1];
+      if (charOffset >= s && charOffset < e) {
+        // skip leading whitespace
+        var trimS = s;
+        while (trimS < e && text[trimS] == ' ') trimS++;
+        return (trimS, e);
+      }
+    }
+    return (0, text.length);
+  }
+
+  /// Double-tap confirmed at cursor [offset]: select sentence + translate.
+  void _handleSentenceTap(int offset) {
+    if (widget.onDoubleTap == null) return;
+    final (start, end) = _sentenceBoundsAt(widget.text, offset);
+    final sentence = widget.text.substring(start, end).trim();
+    if (sentence.isEmpty) return;
+
+    // Visually select the sentence so the user can drag handles freely.
+    _suppressListener = true;
+    _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
+    _suppressListener = false;
+
+    final anchor = _getSelectionAnchor();
+    _suppressOutside = true;
+    _suppressOutsideTimer?.cancel();
+    _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+      _suppressOutside = false;
+    });
+    widget.onDoubleTap!(sentence, anchor);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1095,10 +1146,28 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
       contextMenuBuilder: (ctx, editableState) => const SizedBox.shrink(),
       onTapAlwaysCalled: true,
       onTap: () {
-        // After a tap, TextField places a collapsed cursor at baseOffset.
-        // Expand it to the full word and trigger lookup.
         final offset = _ctrl.selection.baseOffset;
         if (offset < 0) return;
+
+        // ── Double-tap detection ───────────────────────────────────────────
+        final now = DateTime.now();
+        final prev = _lastTapTime;
+        final prevOff = _lastTapOffset;
+        _lastTapTime = now;
+        _lastTapOffset = offset;
+
+        if (prev != null &&
+            now.difference(prev) < const Duration(milliseconds: 350) &&
+            prevOff != null &&
+            (prevOff - offset).abs() < 12) {
+          // Double-tap: reset so a third tap starts fresh
+          _lastTapTime = null;
+          _lastTapOffset = null;
+          _handleSentenceTap(offset);
+          return;
+        }
+
+        // ── Single tap: expand to word and show lookup ─────────────────────
         for (final (start, end) in _wordRanges) {
           if (offset >= start && offset <= end) {
             final word = widget.text.substring(start, end);
@@ -1107,12 +1176,10 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
             _suppressListener = false;
             final anchor = _getSelectionAnchor();
             widget.onWordTap(word, anchor);
-            // Don't show toolbar for single-word tap — word card is shown instead.
-            // Toolbar appears when user drags handles to extend the selection.
             return;
           }
         }
-        // Tapped on non-word area
+        // Tapped on non-word area (space / punctuation)
       },
       onTapOutside: (_) {
         // Ignore onTapOutside for a short window after translate fires,

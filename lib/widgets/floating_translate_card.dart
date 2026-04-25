@@ -77,85 +77,92 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
 
   @override
   Widget build(BuildContext context) {
+    final screenH = MediaQuery.of(context).size.height;
+    final safePad = MediaQuery.of(context).padding;
+    // Whole card must not exceed 75% of usable screen height
+    final maxCardH = (screenH - safePad.top - safePad.bottom) * 0.75;
+
     return Material(
       color: Colors.transparent,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 320),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: const [
-            BoxShadow(color: Color(0x30000000), blurRadius: 24, offset: Offset(0, 8)),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Header ──────────────────────────────────────────────────────
-            _Header(
-              autoSpeak: widget.autoSpeak,
-              speaking: _speaking,
-              isStarred: widget.isStarred,
-              onSpeak: _speaking ? null : _speak,
-              onEdit: widget.isStarred ? widget.onEdit : null,
-              onDismiss: widget.onDismiss,
-            ),
-            // ── Toolbar ─────────────────────────────────────────────────────
-            if (widget.onToolbarAction != null)
-              _TranslateToolbar(
-                text: widget.originalText,
-                onAction: widget.onToolbarAction!,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 320, maxHeight: maxCardH),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: const [
+              BoxShadow(color: Color(0x30000000), blurRadius: 24, offset: Offset(0, 8)),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header ────────────────────────────────────────────────────
+              _Header(
+                autoSpeak: widget.autoSpeak,
+                speaking: _speaking,
+                isStarred: widget.isStarred,
+                onSpeak: _speaking ? null : _speak,
+                onEdit: widget.isStarred ? widget.onEdit : null,
+                onDismiss: widget.onDismiss,
               ),
-            // ── Original text ────────────────────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 80),
-                child: SingleChildScrollView(
-                  child: Text(
-                    widget.originalText,
-                    style: const TextStyle(
-                        fontSize: 14, color: AppTheme.textSecondary,
-                        height: 1.5, fontWeight: FontWeight.w600),
+              // ── Toolbar ───────────────────────────────────────────────────
+              if (widget.onToolbarAction != null)
+                _TranslateToolbar(
+                  text: widget.originalText,
+                  onAction: widget.onToolbarAction!,
+                ),
+              // ── Original text ─────────────────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 80),
+                  child: SingleChildScrollView(
+                    child: Text(
+                      widget.originalText,
+                      style: const TextStyle(
+                          fontSize: 14, color: AppTheme.textSecondary,
+                          height: 1.5, fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const Divider(height: 1, indent: 14, endIndent: 14, color: Color(0xFFEEEEEE)),
-            // ── Results per engine ───────────────────────────────────────────
-            if (_engines.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Center(
-                  child: SizedBox(width: 20, height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppTheme.primary)),
-                ),
-              )
-            else
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 280),
-                child: SingleChildScrollView(
-                  child: Column(
-                    children: _engines.map((engine) {
-                      final isLast = engine == _engines.last;
-                      return _ResultBlock(
-                        engine: engine,
-                        translation: _results[engine.id],
-                        isStarred: widget.isStarred,
-                        isLast: isLast,
-                        onStar: widget.onStar == null ? null : () {
-                          final t = _results[engine.id] ?? '';
-                          widget.onStar!(widget.originalText, t);
-                        },
-                        onUnstar: widget.onUnstar,
-                      );
-                    }).toList(),
+              const Divider(height: 1, indent: 14, endIndent: 14, color: Color(0xFFEEEEEE)),
+              // ── Results per engine (Flexible: fills remaining space) ───────
+              if (_engines.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Center(
+                    child: SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.primary)),
+                  ),
+                )
+              else
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: _engines.map((engine) {
+                        final isLast = engine == _engines.last;
+                        return _ResultBlock(
+                          engine: engine,
+                          translation: _results[engine.id],
+                          isStarred: widget.isStarred,
+                          isLast: isLast,
+                          onStar: widget.onStar == null ? null : () {
+                            final t = _results[engine.id] ?? '';
+                            widget.onStar!(widget.originalText, t);
+                          },
+                          onUnstar: widget.onUnstar,
+                        );
+                      }).toList(),
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
