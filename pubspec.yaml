@@ -38,6 +38,9 @@ dependencies:
   # Persistent settings
   shared_preferences: ^2.3.2
 
+  # Cryptographic signing (Baidu MD5, Youdao SHA256, Tencent HMAC-SHA256)
+  crypto: ^3.0.3
+
   # APKG zip packaging
   archive: ^3.6.1
 

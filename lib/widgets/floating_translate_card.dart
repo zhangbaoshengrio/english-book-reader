@@ -260,8 +260,18 @@ class _ResultBlock extends StatelessWidget {
   });
 
   static const _colors = {
-    'google':   Color(0xFF4285F4),
-    'mymemory': Color(0xFF00A67E),
+    'google':      Color(0xFF4285F4),
+    'microsoft':   Color(0xFF00A4EF),
+    'youdao':      Color(0xFFD92B2B),
+    'baidu':       Color(0xFF2932E1),
+    'sogou':       Color(0xFFFF6600),
+    'deepl':       Color(0xFF0F2B46),
+    'baidu_api':   Color(0xFF2932E1),
+    'youdao_api':  Color(0xFFD92B2B),
+    'tencent_api': Color(0xFF1BA784),
+    'sogou_api':   Color(0xFFFF6600),
+    'deepl_api':   Color(0xFF0F2B46),
+    'mymemory':    Color(0xFF00A67E),
   };
 
   Color get _color => _colors[engine.id] ?? AppTheme.primary;
