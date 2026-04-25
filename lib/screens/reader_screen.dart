@@ -776,8 +776,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       },
       itemBuilder: (ctx, pageIdx) {
         final paras = BookParser.getPage(widget.paragraphs, pageIdx);
+        final bottomInset = MediaQuery.of(ctx).padding.bottom;
         return Padding(
-          padding: EdgeInsets.symmetric(horizontal: _margin, vertical: 20),
+          padding: EdgeInsets.fromLTRB(_margin, 20, _margin, 20 + bottomInset + 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: List.generate(paras.length, (paraIdx) {
