@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../services/settings_service.dart';
 import '../services/translation_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
@@ -15,13 +14,15 @@ class FloatingTranslateCard extends StatefulWidget {
   final String originalText;
   final VoidCallback onDismiss;
   final void Function(String action, String text)? onToolbarAction;
-  /// Called when user stars the phrase. Receives (phrase, translation).
+  /// Called when user stars a result. Receives (phrase, translation).
   final void Function(String phrase, String translation)? onStar;
   /// Called when user unstars the phrase.
   final VoidCallback? onUnstar;
+  /// Called when user taps the edit button (phrase already starred).
+  final VoidCallback? onEdit;
   /// Whether the phrase is already starred.
   final bool isStarred;
-  /// Whether auto-speak is enabled (controls visibility of speak button and auto-play).
+  /// Whether auto-speak is enabled.
   final bool autoSpeak;
 
   const FloatingTranslateCard({
@@ -31,6 +32,7 @@ class FloatingTranslateCard extends StatefulWidget {
     this.onToolbarAction,
     this.onStar,
     this.onUnstar,
+    this.onEdit,
     this.isStarred = false,
     this.autoSpeak = false,
   });
@@ -40,45 +42,31 @@ class FloatingTranslateCard extends StatefulWidget {
 }
 
 class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
-  String? _translation;
-  bool _loading = true;
+  List<TranslationEngine> _engines = [];
+  /// null = still loading; empty string = error/failed
+  final Map<String, String?> _results = {};
   bool _speaking = false;
-
-  List<TranslationEngine> _engines = TranslationService.builtinEngines;
-  String _activeEngineId = 'google';
 
   @override
   void initState() {
     super.initState();
     _init();
-    if (widget.autoSpeak) {
-      TtsService.speak(widget.originalText);
-    }
+    if (widget.autoSpeak) TtsService.speak(widget.originalText);
   }
 
   Future<void> _init() async {
-    final engines    = await TranslationService.getAllEngines();
-    final engineId   = await SettingsService.getTranslationEngine();
-    final activeId   = engines.any((e) => e.id == engineId) ? engineId : engines.first.id;
-    if (mounted) {
-      setState(() {
-        _engines = engines;
-        _activeEngineId = activeId;
-      });
+    final engines = await TranslationService.getEnabledEngines();
+    if (!mounted) return;
+    setState(() => _engines = engines);
+    // Fire all requests in parallel
+    for (final e in engines) {
+      _fetchEngine(e.id);
     }
-    await _fetch(activeId);
   }
 
-  Future<void> _fetch(String engineId) async {
-    if (mounted) setState(() { _loading = true; _translation = null; });
+  Future<void> _fetchEngine(String engineId) async {
     final result = await TranslationService.translate(widget.originalText, engineId);
-    if (mounted) setState(() { _translation = result; _loading = false; });
-  }
-
-  Future<void> _switchEngine(String engineId) async {
-    await SettingsService.setTranslationEngine(engineId);
-    setState(() => _activeEngineId = engineId);
-    await _fetch(engineId);
+    if (mounted) setState(() => _results[engineId] = result);
   }
 
   Future<void> _speak() async {
@@ -104,75 +92,26 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.fromLTRB(14, 12, 8, 10),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
-              ),
-              child: Row(children: [
-                const Icon(Icons.translate_rounded, size: 16, color: AppTheme.primary),
-                const SizedBox(width: 6),
-                const Text('翻译',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                // Speak button (visible only when autoSpeak is on)
-                if (widget.autoSpeak)
-                  GestureDetector(
-                    onTap: _speaking ? null : _speak,
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: _speaking
-                          ? const SizedBox(
-                              width: 18, height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: AppTheme.primary))
-                          : const Icon(Icons.volume_up_rounded,
-                              size: 20, color: AppTheme.primary),
-                    ),
-                  ),
-                // Star button
-                if (widget.onStar != null || widget.onUnstar != null)
-                  GestureDetector(
-                    onTap: () {
-                      if (widget.isStarred) {
-                        widget.onUnstar?.call();
-                      } else {
-                        widget.onStar?.call(
-                          widget.originalText,
-                          _translation ?? '',
-                        );
-                      }
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(
-                        widget.isStarred ? Icons.star_rounded : Icons.star_border_rounded,
-                        size: 20,
-                        color: widget.isStarred ? const Color(0xFFFFBB00) : AppTheme.textTertiary,
-                      ),
-                    ),
-                  ),
-                GestureDetector(
-                  onTap: widget.onDismiss,
-                  child: const Padding(
-                    padding: EdgeInsets.all(4),
-                    child: Icon(Icons.close_rounded, size: 18, color: AppTheme.textTertiary),
-                  ),
-                ),
-              ]),
+            // ── Header ──────────────────────────────────────────────────────
+            _Header(
+              autoSpeak: widget.autoSpeak,
+              speaking: _speaking,
+              isStarred: widget.isStarred,
+              onSpeak: _speaking ? null : _speak,
+              onEdit: widget.isStarred ? widget.onEdit : null,
+              onDismiss: widget.onDismiss,
             ),
-            // Toolbar
+            // ── Toolbar ─────────────────────────────────────────────────────
             if (widget.onToolbarAction != null)
               _TranslateToolbar(
                 text: widget.originalText,
                 onAction: widget.onToolbarAction!,
               ),
-            // Original
+            // ── Original text ────────────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 90),
+                constraints: const BoxConstraints(maxHeight: 80),
                 child: SingleChildScrollView(
                   child: Text(
                     widget.originalText,
@@ -184,38 +123,37 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
               ),
             ),
             const Divider(height: 1, indent: 14, endIndent: 14, color: Color(0xFFEEEEEE)),
-            // Translation result
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-              child: _loading
-                  ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: SizedBox(width: 20, height: 20,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: AppTheme.primary)),
-                      ))
-                  : ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 120),
-                      child: SingleChildScrollView(
-                        child: Text(
-                          (_translation?.isNotEmpty == true)
-                              ? _translation!
-                              : '翻译失败，请检查网络或切换引擎',
-                          style: const TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF1A7A1A),
-                              height: 1.6),
-                        ),
-                      ),
-                    ),
-            ),
-            // Engine selector
-            if (_engines.length > 1)
-              _EngineSelector(
-                engines: _engines,
-                activeId: _activeEngineId,
-                onSwitch: _switchEngine,
+            // ── Results per engine ───────────────────────────────────────────
+            if (_engines.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(
+                  child: SizedBox(width: 20, height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppTheme.primary)),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 280),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: _engines.map((engine) {
+                      final isLast = engine == _engines.last;
+                      return _ResultBlock(
+                        engine: engine,
+                        translation: _results[engine.id],
+                        isStarred: widget.isStarred,
+                        isLast: isLast,
+                        onStar: widget.onStar == null ? null : () {
+                          final t = _results[engine.id] ?? '';
+                          widget.onStar!(widget.originalText, t);
+                        },
+                        onUnstar: widget.onUnstar,
+                      );
+                    }).toList(),
+                  ),
+                ),
               ),
           ],
         ),
@@ -224,66 +162,181 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
   }
 }
 
-// ── Engine selector row ────────────────────────────────────────────────────────
+// ── Header ────────────────────────────────────────────────────────────────────
 
-class _EngineSelector extends StatelessWidget {
-  final List<TranslationEngine> engines;
-  final String activeId;
-  final void Function(String id) onSwitch;
+class _Header extends StatelessWidget {
+  final bool autoSpeak;
+  final bool speaking;
+  final bool isStarred;
+  final VoidCallback? onSpeak;
+  final VoidCallback? onEdit;
+  final VoidCallback onDismiss;
 
-  const _EngineSelector({
-    required this.engines,
-    required this.activeId,
-    required this.onSwitch,
+  const _Header({
+    required this.autoSpeak,
+    required this.speaking,
+    required this.isStarred,
+    required this.onSpeak,
+    required this.onEdit,
+    required this.onDismiss,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 8, 10),
       decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
+        border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
       ),
-      child: Row(
-        children: [
-          const Text('引擎',
-              style: TextStyle(fontSize: 11, color: AppTheme.textTertiary)),
-          const SizedBox(width: 8),
-          ...engines.map((e) => Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: GestureDetector(
-              onTap: activeId == e.id ? null : () => onSwitch(e.id),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: activeId == e.id
-                      ? AppTheme.primary.withValues(alpha: 0.12)
-                      : const Color(0xFFF0F0F0),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: activeId == e.id ? AppTheme.primary : Colors.transparent,
-                    width: 1,
-                  ),
-                ),
-                child: Text(
-                  e.name,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: activeId == e.id ? FontWeight.w700 : FontWeight.w400,
-                    color: activeId == e.id ? AppTheme.primary : AppTheme.textSecondary,
-                  ),
-                ),
+      child: Row(children: [
+        const Icon(Icons.translate_rounded, size: 16, color: AppTheme.primary),
+        const SizedBox(width: 6),
+        const Text('翻译',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        const Spacer(),
+        // Edit button (when starred)
+        if (isStarred && onEdit != null)
+          GestureDetector(
+            onTap: onEdit,
+            child: Container(
+              margin: const EdgeInsets.only(right: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
               ),
+              child: const Text('编辑',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.primary,
+                      fontWeight: FontWeight.w600)),
             ),
-          )),
-        ],
-      ),
+          ),
+        // Speak button (only when autoSpeak is on)
+        if (autoSpeak)
+          GestureDetector(
+            onTap: onSpeak,
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: speaking
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppTheme.primary))
+                  : const Icon(Icons.volume_up_rounded,
+                      size: 20, color: AppTheme.primary),
+            ),
+          ),
+        // Close
+        GestureDetector(
+          onTap: onDismiss,
+          child: const Padding(
+            padding: EdgeInsets.all(4),
+            child: Icon(Icons.close_rounded, size: 18, color: AppTheme.textTertiary),
+          ),
+        ),
+      ]),
     );
   }
 }
 
-// ── Toolbar row ───────────────────────────────────────────────────────────────
+// ── Single engine result block ────────────────────────────────────────────────
+
+class _ResultBlock extends StatelessWidget {
+  final TranslationEngine engine;
+  final String? translation; // null = loading
+  final bool isStarred;
+  final bool isLast;
+  final VoidCallback? onStar;
+  final VoidCallback? onUnstar;
+
+  const _ResultBlock({
+    required this.engine,
+    required this.translation,
+    required this.isStarred,
+    required this.isLast,
+    this.onStar,
+    this.onUnstar,
+  });
+
+  static const _colors = {
+    'google':   Color(0xFF4285F4),
+    'mymemory': Color(0xFF00A67E),
+  };
+
+  Color get _color => _colors[engine.id] ?? AppTheme.primary;
+
+  @override
+  Widget build(BuildContext context) {
+    final loading = translation == null;
+    final failed  = !loading && translation!.isEmpty;
+
+    return Container(
+      decoration: BoxDecoration(
+        border: isLast
+            ? null
+            : const Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Engine label
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Engine name tag
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(engine.name,
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: _color)),
+              ),
+              const SizedBox(height: 6),
+              // Translation text / loading / failed
+              if (loading)
+                const SizedBox(
+                  width: 18, height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppTheme.primary),
+                )
+              else if (failed)
+                const Text('翻译失败',
+                    style: TextStyle(fontSize: 13, color: AppTheme.textTertiary))
+              else
+                Text(translation!,
+                    style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF1A7A1A),
+                        height: 1.6)),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        // Star button
+        if (onStar != null || onUnstar != null)
+          GestureDetector(
+            onTap: isStarred ? onUnstar : onStar,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Icon(
+                isStarred ? Icons.star_rounded : Icons.star_border_rounded,
+                size: 22,
+                color: isStarred ? const Color(0xFFFFBB00) : AppTheme.textTertiary,
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+// ── Action toolbar ────────────────────────────────────────────────────────────
 
 class _TranslateToolbar extends StatelessWidget {
   final String text;

@@ -353,6 +353,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             isStarred: _vocabSet.contains(_translateText.toLowerCase()),
             onStar: (phrase, translation) => _starPhrase(phrase, translation),
             onUnstar: () => _unstar(_translateText),
+            onEdit: () => _editVocabEntry(_translateText),
             autoSpeak: _autoSpeak,
           ),
         ),

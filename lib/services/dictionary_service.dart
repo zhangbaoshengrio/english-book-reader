@@ -8,7 +8,6 @@ import 'package:sqflite/sqflite.dart';
 import '../models/definition.dart';
 import 'database_service.dart';
 import 'mdx_service.dart';
-import 'settings_service.dart';
 import 'translation_service.dart';
 
 class DictionaryService {
@@ -119,9 +118,11 @@ class DictionaryService {
     );
   }
 
-  /// Translate an arbitrary sentence/text to Chinese using the active engine.
+  /// Translate an arbitrary sentence/text to Chinese.
+  /// Uses the first enabled engine (falls back to Google).
   static Future<String> translateSentence(String text) async {
-    final engineId = await SettingsService.getTranslationEngine();
+    final engines = await TranslationService.getEnabledEngines();
+    final engineId = engines.isNotEmpty ? engines.first.id : 'google';
     return TranslationService.translate(text, engineId);
   }
 
