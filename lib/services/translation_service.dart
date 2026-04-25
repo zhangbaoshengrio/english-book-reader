@@ -188,35 +188,29 @@ class TranslationService {
       (await getEngines()).where((e) => e.enabled).toList();
 
   /// Returns enabled translation engines + enabled AI engines (as aiEngine type),
-  /// in user-configured order (AI engines stored as virtual entries in the list).
+  /// in user-configured order. AI virtual entries are persisted in translation config.
   static Future<List<TranslationEngine>> getEnabledEnginesWithAi() async {
     final engines = await getEngines();
-    // Add AI engine virtual entries if not already in list
-    final aiEngines = await AiService.getEnabledEngines();
-    final result = <TranslationEngine>[];
-    for (final e in engines) {
-      if (e.enabled) result.add(e);
-    }
-    // Append enabled AI engines that aren't already represented
-    for (final ai in aiEngines) {
-      final virtualId = 'ai_${ai.id}';
-      if (!result.any((e) => e.id == virtualId)) {
-        result.add(TranslationEngine(
-          id: virtualId,
-          name: ai.name,
-          type: EngineType.aiEngine,
-          enabled: true,
-        ));
-      }
-    }
-    return result;
+    // AI engines stored as aiEngine type entries in the same list
+    // Cross-check with AiService to ensure enabled state is accurate
+    final aiConfigs = await AiService.getEngines();
+    return engines.where((e) {
+      if (e.type != EngineType.aiEngine) return e.enabled;
+      // For AI engines, also check that the API key is still set
+      final aiId = e.id.substring(3);
+      final aiCfg = aiConfigs.firstWhere((a) => a.id == aiId,
+          orElse: () => const AiEngine(id: '', name: ''));
+      return e.enabled && aiCfg.apiKey.isNotEmpty;
+    }).toList();
   }
 
   /// Returns all engines (translation + AI virtual entries) for the management page.
+  /// AI virtual entries are already in the persisted list; only append newly added AI engines.
   static Future<List<TranslationEngine>> getAllEnginesForManagement() async {
     final engines = await getEngines();
     final aiEngines = await AiService.getEngines();
     final result = List<TranslationEngine>.from(engines);
+    // Append any AI engines not yet in the list (newly configured)
     for (final ai in aiEngines) {
       final virtualId = 'ai_${ai.id}';
       if (!result.any((e) => e.id == virtualId)) {

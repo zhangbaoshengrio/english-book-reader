@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../services/ai_service.dart';
 import '../services/settings_service.dart';
 import '../services/translation_service.dart';
 import '../theme/app_theme.dart';
@@ -38,28 +37,12 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
   }
 
   Future<void> _save() async {
-    // Split: save translation engines (non-AI) and AI engine order/enabled state separately
-    final translationEngines = _engines.where((e) => e.type != EngineType.aiEngine).toList();
-    await TranslationService.saveEngines(translationEngines);
-    // Sync AI engine enabled state back to AiService
-    final aiEngines = await AiService.getEngines();
-    for (final e in _engines.where((e) => e.type == EngineType.aiEngine)) {
-      final aiId = e.id.substring(3); // strip 'ai_' prefix
-      final idx = aiEngines.indexWhere((a) => a.id == aiId);
-      if (idx >= 0) {
-        aiEngines[idx] = aiEngines[idx].copyWith(enabled: e.enabled);
-      }
-    }
-    await AiService.saveEngines(aiEngines);
+    // Save all engines (including aiEngine virtual entries) to persist order
+    await TranslationService.saveEngines(_engines);
   }
 
   void _toggleEnabled(int index, bool value) {
-    final engine = _engines[index];
-    // AI engines without API key cannot be enabled
-    if (value && engine.type == EngineType.aiEngine) {
-      // check will be done in _save via AiService; just update UI
-    }
-    setState(() => _engines[index] = engine.copyWith(enabled: value));
+    setState(() => _engines[index] = _engines[index].copyWith(enabled: value));
     _save();
   }
 
@@ -222,12 +205,11 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
                       final engine = _engines[index];
                       final isCustom = engine.type == EngineType.customUrl;
                       final isApiEngine = engine.type == EngineType.officialApi;
-                      final isAi = engine.type == EngineType.aiEngine;
                       return _EngineRow(
                         key: ValueKey(engine.id),
                         engine: engine,
                         isLast: index == _engines.length - 1,
-                        onToggle: isAi ? null : (v) => _toggleEnabled(index, v),
+                        onToggle: (v) => _toggleEnabled(index, v),
                         onConfigure: isApiEngine
                             ? () => _showCredentialSheet(engine)
                             : null,
@@ -313,7 +295,7 @@ class _EngineRow extends StatelessWidget {
                 ),
               if (engine.type == EngineType.aiEngine)
                 const Text(
-                  '在 AI 引擎中管理开关',
+                  'AI 句子分析',
                   style: TextStyle(fontSize: 11, color: AppTheme.textTertiary),
                 ),
             ],
