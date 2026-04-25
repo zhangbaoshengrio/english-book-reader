@@ -776,18 +776,32 @@ class _ReaderScreenState extends State<ReaderScreen> {
       },
       itemBuilder: (ctx, pageIdx) {
         final paras = BookParser.getPage(widget.paragraphs, pageIdx);
-        return Padding(
-          padding: EdgeInsets.symmetric(horizontal: _margin, vertical: 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: List.generate(paras.length, (paraIdx) {
-              final text = paras[paraIdx];
-              final compositeKey = pageIdx * 10000 + paraIdx;
-              final key = _paraKeys.putIfAbsent(
-                  compositeKey, () => GlobalKey<_ReaderParagraphState>());
-              return _buildParaWidget(key: key, text: text, paraKey: compositeKey);
-            }),
-          ),
+        final bottomInset = MediaQuery.of(context).viewPadding.bottom;
+        const topPad = 20.0;
+        final bottomPad = 16.0 + bottomInset;
+        return LayoutBuilder(
+          builder: (ctx, constraints) {
+            final maxH = constraints.maxHeight - topPad - bottomPad;
+            return Padding(
+              padding: EdgeInsets.fromLTRB(_margin, topPad, _margin, bottomPad),
+              child: ClipRect(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxH),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(paras.length, (paraIdx) {
+                      final text = paras[paraIdx];
+                      final compositeKey = pageIdx * 10000 + paraIdx;
+                      final key = _paraKeys.putIfAbsent(
+                          compositeKey, () => GlobalKey<_ReaderParagraphState>());
+                      return _buildParaWidget(key: key, text: text, paraKey: compositeKey);
+                    }),
+                  ),
+                ),
+              ),
+            );
+          },
         );
       },
     );
