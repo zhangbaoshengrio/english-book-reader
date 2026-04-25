@@ -978,10 +978,11 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   late List<(int, int)> _wordRanges;
   Timer? _translateTimer;
   Timer? _suppressOutsideTimer;
+  Timer? _wordLookupTimer;  // delayed so double-tap can preempt it
   bool _suppressListener = false;
   bool _suppressOutside = false;
-  DateTime? _lastTapTime;
-  int? _lastTapOffset;
+  DateTime? _lastPtrDownTime;
+  Offset?   _lastPtrDownPos;
   @override
   void initState() {
     super.initState();
@@ -1054,6 +1055,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   void dispose() {
     _translateTimer?.cancel();
     _suppressOutsideTimer?.cancel();
+    _wordLookupTimer?.cancel();
     _ctrl.removeListener(_onSelectionChanged);
     _ctrl.dispose();
     _focusNode.dispose();
@@ -1125,68 +1127,85 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: _ctrl,
-      focusNode: _focusNode,
-      readOnly: true,
-      maxLines: null,
-      enableInteractiveSelection: true,
-      style: TextStyle(
-        fontSize: widget.fontSize,
-        height: widget.lineHeight,
-        color: widget.textColor,
-        fontFamily: widget.fontFamily,
-        letterSpacing: 0.15,
-      ),
-      decoration: const InputDecoration(
-        border: InputBorder.none,
-        isDense: true,
-        contentPadding: EdgeInsets.zero,
-      ),
-      contextMenuBuilder: (ctx, editableState) => const SizedBox.shrink(),
-      onTapAlwaysCalled: true,
-      onTap: () {
-        final offset = _ctrl.selection.baseOffset;
-        if (offset < 0) return;
-
-        // ── Double-tap detection ───────────────────────────────────────────
+    // Listener receives raw pointer events before the gesture arena, so we can
+    // reliably detect the *second* pointer-down of a double-tap even though
+    // TextField's internal DoubleTapGestureRecognizer consumes the second onTap.
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) {
         final now = DateTime.now();
-        final prev = _lastTapTime;
-        final prevOff = _lastTapOffset;
-        _lastTapTime = now;
-        _lastTapOffset = offset;
-
-        if (prev != null &&
-            now.difference(prev) < const Duration(milliseconds: 350) &&
-            prevOff != null &&
-            (prevOff - offset).abs() < 12) {
-          // Double-tap: reset so a third tap starts fresh
-          _lastTapTime = null;
-          _lastTapOffset = null;
-          _handleSentenceTap(offset);
-          return;
+        if (_lastPtrDownTime != null &&
+            now.difference(_lastPtrDownTime!) <
+                const Duration(milliseconds: 300) &&
+            _lastPtrDownPos != null &&
+            (event.position - _lastPtrDownPos!).distance < 40) {
+          // ── Second tap of a double-tap ─────────────────────────────────
+          _wordLookupTimer?.cancel();   // cancel pending single-tap word card
+          _lastPtrDownTime = null;      // reset for next gesture
+          // Run after the internal DoubleTap handler (which selects the word)
+          // so _ctrl.selection already reflects the tapped position.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _translateTimer?.cancel();
+            final sel = _ctrl.selection;
+            final offset = sel.isCollapsed ? sel.baseOffset : sel.start;
+            if (offset >= 0) _handleSentenceTap(offset);
+          });
+        } else {
+          _lastPtrDownTime = now;
+          _lastPtrDownPos = event.position;
         }
+      },
+      child: TextField(
+        controller: _ctrl,
+        focusNode: _focusNode,
+        readOnly: true,
+        maxLines: null,
+        enableInteractiveSelection: true,
+        style: TextStyle(
+          fontSize: widget.fontSize,
+          height: widget.lineHeight,
+          color: widget.textColor,
+          fontFamily: widget.fontFamily,
+          letterSpacing: 0.15,
+        ),
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          isDense: true,
+          contentPadding: EdgeInsets.zero,
+        ),
+        contextMenuBuilder: (ctx, editableState) => const SizedBox.shrink(),
+        onTapAlwaysCalled: true,
+        onTap: () {
+          final offset = _ctrl.selection.baseOffset;
+          if (offset < 0) return;
 
-        // ── Single tap: expand to word and show lookup ─────────────────────
-        for (final (start, end) in _wordRanges) {
-          if (offset >= start && offset <= end) {
-            final word = widget.text.substring(start, end);
-            _suppressListener = true;
-            _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
-            _suppressListener = false;
-            final anchor = _getSelectionAnchor();
-            widget.onWordTap(word, anchor);
-            return;
+          // ── Single tap: expand to word, delay card so double-tap can cancel ─
+          for (final (start, end) in _wordRanges) {
+            if (offset >= start && offset <= end) {
+              final word = widget.text.substring(start, end);
+              _suppressListener = true;
+              _ctrl.selection =
+                  TextSelection(baseOffset: start, extentOffset: end);
+              _suppressListener = false;
+              final anchor = _getSelectionAnchor();
+              // 300 ms delay: if second pointer-down arrives first, the timer
+              // gets cancelled and sentence translation runs instead.
+              _wordLookupTimer?.cancel();
+              _wordLookupTimer =
+                  Timer(const Duration(milliseconds: 300), () {
+                if (mounted) widget.onWordTap(word, anchor);
+              });
+              return;
+            }
           }
-        }
-        // Tapped on non-word area (space / punctuation)
-      },
-      onTapOutside: (_) {
-        // Ignore onTapOutside for a short window after translate fires,
-        // because the translate overlay appearing triggers an outside-tap event.
-        if (_suppressOutside) return;
-        widget.onTapOutside();
-      },
+          // Tapped on non-word area (space / punctuation)
+        },
+        onTapOutside: (_) {
+          if (_suppressOutside) return;
+          widget.onTapOutside();
+        },
+      ),
     );
   }
 }
