@@ -1,7 +1,11 @@
+import 'dart:io';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'voice_engine_service.dart';
 
 class TtsService {
   static final FlutterTts _tts = FlutterTts();
+  static final AudioPlayer _player = AudioPlayer();
   static bool _ready = false;
   static double _speed = 0.75;
 
@@ -20,10 +24,54 @@ class TtsService {
   }
 
   static Future<void> speak(String text) async {
+    // Dispatch to active voice engine
+    final engine = await VoiceEngineService.getActiveEngine();
+    if (engine != null) {
+      if (engine.type == VoiceEngineType.builtinTts) {
+        // Use engine's stored speed
+        _speed = engine.speed;
+        _ready = false;
+      } else {
+        final bytes = await VoiceEngineService.fetchAudio(text, engine);
+        if (bytes != null && bytes.isNotEmpty) {
+          await _playBytes(bytes);
+          return;
+        }
+        // Fall through to builtin on failure
+      }
+    }
+    await _speakBuiltin(text);
+  }
+
+  static Future<void> _speakBuiltin(String text) async {
     await _init();
     await _tts.stop();
     await _tts.speak(text);
   }
 
-  static Future<void> stop() async => _tts.stop();
+  static Future<void> _playBytes(List<int> bytes) async {
+    String? path;
+    try {
+      path = await VoiceEngineService.saveTempAudio(bytes, 'mp3');
+      if (path == null) return;
+      await _tts.stop();
+      await _player.stop();
+      await _player.play(DeviceFileSource(path));
+    } catch (_) {
+      // ignore playback errors
+    } finally {
+      // Clean up temp file after a delay
+      if (path != null) {
+        final filePath = path;
+        Future.delayed(const Duration(seconds: 30), () {
+          try { File(filePath).deleteSync(); } catch (_) {}
+        });
+      }
+    }
+  }
+
+  static Future<void> stop() async {
+    await _tts.stop();
+    await _player.stop();
+  }
 }

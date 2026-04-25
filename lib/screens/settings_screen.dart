@@ -6,10 +6,10 @@ import 'package:share_plus/share_plus.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/settings_service.dart';
-import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 import 'dict_manager_screen.dart';
 import 'translation_engine_screen.dart';
+import 'voice_engine_screen.dart';
 import 'vocab_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -20,17 +20,12 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool   _autoSpeak     = false;
   double _fontSize      = 18;
   double _lineHeight    = 1.9;
-  double _ttsSpeed      = 0.75;
   double _margin        = 22;
   String _theme         = ReaderTheme.paper;
   String _fontFamily    = 'Georgia';
   String _pageTurnStyle = PageTurnStyle.scroll;
-
-  // Translation
-  bool _autoTranslate = true;
 
   @override
   void initState() {
@@ -41,27 +36,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _load() async {
     final results = await Future.wait([
-      SettingsService.getAutoSpeak(),
       SettingsService.getFontSize(),
       SettingsService.getLineHeight(),
-      SettingsService.getTtsSpeed(),
       SettingsService.getTheme(),
       SettingsService.getFontFamily(),
       SettingsService.getMargin(),
       SettingsService.getPageTurnStyle(),
-      SettingsService.getAutoTranslate(),
     ]);
     if (!mounted) return;
     setState(() {
-      _autoSpeak        = results[0] as bool;
-      _fontSize         = results[1] as double;
-      _lineHeight       = results[2] as double;
-      _ttsSpeed         = results[3] as double;
-      _theme            = results[4] as String;
-      _fontFamily       = results[5] as String;
-      _margin           = results[6] as double;
-      _pageTurnStyle    = results[7] as String;
-      _autoTranslate = results[8] as bool;
+      _fontSize         = results[0] as double;
+      _lineHeight       = results[1] as double;
+      _theme            = results[2] as String;
+      _fontFamily       = results[3] as String;
+      _margin           = results[4] as double;
+      _pageTurnStyle    = results[5] as String;
     });
   }
 
@@ -173,54 +162,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ]),
 
-          // ── 朗读设置 ────────────────────────────────────────────────────────
-          _SectionHeader('朗读'),
+          // ── 翻译 & 语音 ───────────────────────────────────────────────────────
+          _SectionHeader('翻译与语音'),
           _Card(children: [
-            SwitchListTile(
-              title: const Text('自动发音', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-              subtitle: const Text('点击单词时自动朗读', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-              value: _autoSpeak,
-              activeTrackColor: AppTheme.primary.withValues(alpha: 0.4),
-              activeThumbColor: AppTheme.primary,
-              onChanged: (v) {
-                setState(() => _autoSpeak = v);
-                SettingsService.setAutoSpeak(v);
-              },
-            ),
-            const Divider(height: 1, indent: 16, endIndent: 16),
-            _SliderRow(
-              label: '朗读速度',
-              value: _ttsSpeed,
-              min: 0.3, max: 1.5, divisions: 12,
-              display: _ttsSpeed.toStringAsFixed(2),
-              onChanged: (v) => setState(() => _ttsSpeed = v),
-              onChangeEnd: (v) {
-                SettingsService.setTtsSpeed(v);
-                TtsService.setSpeed(v);
-              },
-            ),
-          ]),
-
-          // ── 翻译 ─────────────────────────────────────────────────────────────
-          _SectionHeader('翻译'),
-          _Card(children: [
-            SwitchListTile(
-              title: const Text('选句自动翻译', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-              subtitle: const Text('划选文字后自动弹出翻译', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-              value: _autoTranslate,
-              activeTrackColor: AppTheme.primary.withValues(alpha: 0.4),
-              activeThumbColor: AppTheme.primary,
-              onChanged: (v) {
-                setState(() => _autoTranslate = v);
-                SettingsService.setAutoTranslate(v);
-              },
+            _NavRow(
+              icon: Icons.translate_rounded,
+              label: '翻译引擎',
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const TranslationEngineScreen())),
             ),
             const Divider(height: 1, indent: 52, endIndent: 0),
             _NavRow(
-              icon: Icons.translate_rounded,
-              label: '翻译引擎管理',
+              icon: Icons.record_voice_over_rounded,
+              label: '语音引擎',
               onTap: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const TranslationEngineScreen())),
+                  MaterialPageRoute(builder: (_) => const VoiceEngineScreen())),
             ),
           ]),
 

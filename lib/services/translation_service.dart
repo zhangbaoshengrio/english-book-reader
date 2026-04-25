@@ -327,34 +327,57 @@ class TranslationService {
     return null;
   }
 
-  /// 网易有道 (aidemo unofficial endpoint)
+  /// 网易有道 (dict.youdao.com unofficial endpoint)
   static Future<String> _youdaoFree(String text) async {
-    final uri = Uri.parse(
-        'https://aidemo.youdao.com/trans'
-        '?f=en&t=zh-CHS&q=${Uri.encodeComponent(text)}');
-    final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-    if (resp.statusCode == 200) {
-      final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      final list = data['translation'] as List?;
-      if (list != null && list.isNotEmpty) return list.first as String? ?? '';
-    }
+    try {
+      final uri = Uri.parse(
+          'https://dict.youdao.com/translate'
+          '?doctype=json&type=EN2ZH&i=${Uri.encodeComponent(text)}');
+      final resp = await http.get(uri, headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+        'Referer': 'https://dict.youdao.com/',
+      }).timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        final list = data['translateResult'] as List?;
+        if (list != null && list.isNotEmpty) {
+          final inner = list.first as List?;
+          if (inner != null && inner.isNotEmpty) {
+            return (inner.first['tgt'] as String?) ?? '';
+          }
+        }
+      }
+    } catch (_) {}
     return '';
   }
 
-  /// 百度 (unofficial transapi endpoint)
+  /// 百度 (fanyi.baidu.com unofficial endpoint with token)
   static Future<String> _baiduFree(String text) async {
     try {
+      // Step 1: get token from main page
+      final pageResp = await http.get(
+        Uri.parse('https://fanyi.baidu.com/'),
+        headers: {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'},
+      ).timeout(const Duration(seconds: 8));
+      String token = '';
+      final tokenMatch = RegExp(r'token\s*[:=]\s*["\x27]([^"\x27]+)["\x27]').firstMatch(pageResp.body);
+      if (tokenMatch != null) token = tokenMatch.group(1) ?? '';
+      if (token.isEmpty) return '';
+
+      // Step 2: translate
       final resp = await http.post(
-        Uri.parse('https://fanyi.baidu.com/transapi'),
+        Uri.parse('https://fanyi.baidu.com/v2transapi?from=en&to=zh'),
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'Mozilla/5.0',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+          'Referer': 'https://fanyi.baidu.com/',
+          'Origin': 'https://fanyi.baidu.com',
         },
-        body: 'from=en&to=zh&query=${Uri.encodeComponent(text)}&source=txt',
+        body: 'from=en&to=zh&query=${Uri.encodeComponent(text)}&transtype=translang&simple_means_flag=3&sign=&token=$token&domain=common',
       ).timeout(const Duration(seconds: 10));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
-        final list = data['data'] as List?;
+        final list = data['trans_result']?['data'] as List?;
         if (list != null && list.isNotEmpty) {
           return (list.first['dst'] as String?) ?? '';
         }
@@ -363,16 +386,26 @@ class TranslationService {
     return '';
   }
 
-  /// 搜狗 (unofficial transpc endpoint)
+  /// 搜狗 (fanyi.sogou.com unofficial endpoint)
   static Future<String> _sogouFree(String text) async {
     try {
+      final uuid = _generateUuid();
       final resp = await http.post(
         Uri.parse('https://fanyi.sogou.com/api/transpc/text/result'),
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://fanyi.sogou.com/',
+          'Origin': 'https://fanyi.sogou.com',
         },
-        body: jsonEncode({'from': 'en', 'to': 'zh-CHS', 'text': text}),
+        body: jsonEncode({
+          'from': 'en',
+          'to': 'zh-CHS',
+          'text': text,
+          'uuid': uuid,
+          'pid': 'sogou-dict-vr',
+          'addSugg': '0',
+        }),
       ).timeout(const Duration(seconds: 10));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -382,40 +415,65 @@ class TranslationService {
     return '';
   }
 
-  /// DeepL (unofficial JSON-RPC endpoint)
+  static String _generateUuid() {
+    final rand = Random();
+    String r(int n) => rand.nextInt(n).toRadixString(16).padLeft(4, '0');
+    return '${r(65536)}${r(65536)}-${r(65536)}-4${r(4096).substring(1)}-${(rand.nextInt(4) + 8).toRadixString(16)}${r(4096).substring(1)}-${r(65536)}${r(65536)}${r(65536)}';
+  }
+
+  /// DeepL (unofficial JSON-RPC endpoint with proper id parity trick)
   static Future<String> _deeplFree(String text) async {
-    final id = Random().nextInt(9000000) + 1000000;
+    // DeepL uses id parity check: if "method":"LMT_handle_texts" appears (count+1) times,
+    // id must be odd. Using a simple approach: always use an odd id.
+    final id = (Random().nextInt(4500000) * 2) + 1000001; // always odd
     try {
+      final body = jsonEncode({
+        'jsonrpc': '2.0',
+        'method': 'LMT_handle_texts',
+        'id': id,
+        'params': {
+          'texts': [
+            {'text': text, 'requestAlternatives': 0}
+          ],
+          'splitting': 'newlines',
+          'lang': {
+            'target_lang': 'ZH',
+            'source_lang_computed': 'EN',
+          },
+          'timestamp': _deeplTimestamp(text),
+        },
+      });
       final resp = await http.post(
         Uri.parse('https://www2.deepl.com/jsonrpc'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'jsonrpc': '2.0',
-          'method': 'LMT_handle_texts',
-          'id': id,
-          'params': {
-            'texts': [
-              {'text': text, 'requestAlternatives': 0}
-            ],
-            'splitting': 'newlines',
-            'lang': {
-              'target_lang': 'ZH',
-              'source_lang_computed': 'EN',
-            },
-          },
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'DeepL-iOS/3.7.0 (iPhone; iOS 17.0)',
+          'Accept': '*/*',
+        },
+        body: body,
       ).timeout(const Duration(seconds: 12));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map<String, dynamic>;
-        final texts = data['result']?['translations'] as List?;
-        if (texts != null && texts.isNotEmpty) {
-          return (texts.first['beams']?[0]?['sentences']?[0]?['text']
-                  as String?) ??
-              '';
+        final translations = data['result']?['translations'] as List?;
+        if (translations != null && translations.isNotEmpty) {
+          final beams = translations.first['beams'] as List?;
+          if (beams != null && beams.isNotEmpty) {
+            final sentences = beams.first['sentences'] as List?;
+            if (sentences != null && sentences.isNotEmpty) {
+              return (sentences.first['text'] as String?) ?? '';
+            }
+          }
         }
       }
     } catch (_) {}
     return '';
+  }
+
+  static int _deeplTimestamp(String text) {
+    // Count 'i' characters to compute timestamp offset (DeepL anti-bot trick)
+    final iCount = 'i'.allMatches(text).length + 1;
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    return ts - (ts % iCount) + iCount;
   }
 
   // ── Official API engines ───────────────────────────────────────────────────

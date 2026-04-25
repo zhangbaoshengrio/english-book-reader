@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/settings_service.dart';
 import '../services/translation_service.dart';
 import '../theme/app_theme.dart';
 
@@ -13,6 +14,7 @@ class TranslationEngineScreen extends StatefulWidget {
 class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
   List<TranslationEngine> _engines = [];
   bool _loading = true;
+  bool _autoTranslate = true;
 
   @override
   void initState() {
@@ -21,8 +23,17 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
   }
 
   Future<void> _load() async {
-    final engines = await TranslationService.getEngines();
-    if (mounted) setState(() { _engines = engines; _loading = false; });
+    final results = await Future.wait([
+      TranslationService.getEngines(),
+      SettingsService.getAutoTranslate(),
+    ]);
+    if (mounted) {
+      setState(() {
+        _engines = results[0] as List<TranslationEngine>;
+        _autoTranslate = results[1] as bool;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -155,8 +166,26 @@ class _TranslationEngineScreenState extends State<TranslationEngineScreen> {
           ? const Center(child: CircularProgressIndicator(color: AppTheme.primary))
           : Column(
               children: [
+                // ── 选句自动翻译 toggle ──────────────────────────────────────
+                Container(
+                  color: Colors.white,
+                  child: SwitchListTile(
+                    title: const Text('选句自动翻译',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                    subtitle: const Text('划选文字后自动弹出翻译',
+                        style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                    value: _autoTranslate,
+                    activeTrackColor: AppTheme.primary.withValues(alpha: 0.4),
+                    activeThumbColor: AppTheme.primary,
+                    onChanged: (v) {
+                      setState(() => _autoTranslate = v);
+                      SettingsService.setAutoTranslate(v);
+                    },
+                  ),
+                ),
+                const Divider(height: 1),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
                   child: const Text(
                     '长按拖动可调整顺序；官方 API 引擎需点击钥匙图标配置密钥后启用',
                     style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
