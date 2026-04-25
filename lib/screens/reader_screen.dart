@@ -755,15 +755,24 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   // ── Scroll mode ───────────────────────────────────────────────────────────
+  // Group every 8 original paragraphs into one TextField so selection can
+  // span multiple sentences (original blank-line-separated chunks).
+  static const _scrollGroupSize = 8;
+
   Widget _buildScrollContent() {
+    final total = widget.paragraphs.length;
+    final groupCount = (total + _scrollGroupSize - 1) ~/ _scrollGroupSize;
     return ListView.builder(
       controller: _scroll,
       padding: EdgeInsets.symmetric(horizontal: _margin, vertical: 20),
-      itemCount: widget.paragraphs.length,
-      itemBuilder: (ctx, idx) {
-        final text = widget.paragraphs[idx];
-        final key = _paraKeys.putIfAbsent(idx, () => GlobalKey<_ReaderParagraphState>());
-        return _buildParaWidget(key: key, text: text, paraKey: idx);
+      itemCount: groupCount,
+      itemBuilder: (ctx, groupIdx) {
+        final start = groupIdx * _scrollGroupSize;
+        final end = (start + _scrollGroupSize).clamp(0, total);
+        final text = widget.paragraphs.sublist(start, end).join('\n\n');
+        final key = _paraKeys.putIfAbsent(
+            start, () => GlobalKey<_ReaderParagraphState>());
+        return _buildParaWidget(key: key, text: text, paraKey: start);
       },
     );
   }
@@ -795,13 +804,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
-                    children: List.generate(paras.length, (paraIdx) {
-                      final text = paras[paraIdx];
-                      final compositeKey = pageIdx * 10000 + paraIdx;
-                      final key = _paraKeys.putIfAbsent(
-                          compositeKey, () => GlobalKey<_ReaderParagraphState>());
-                      return _buildParaWidget(key: key, text: text, paraKey: compositeKey);
-                    }),
+                    children: [
+                      // Combine all paragraphs on this page into one TextField
+                      // so the user can freely select across multiple sentences.
+                      _buildParaWidget(
+                        key: _paraKeys.putIfAbsent(
+                            pageIdx * 10000,
+                            () => GlobalKey<_ReaderParagraphState>()),
+                        text: paras.join('\n\n'),
+                        paraKey: pageIdx * 10000,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1095,9 +1108,9 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
       final s = boundaries[i];
       final e = boundaries[i + 1];
       if (charOffset >= s && charOffset < e) {
-        // skip leading whitespace
+        // skip leading whitespace AND newlines (present in merged paragraphs)
         var trimS = s;
-        while (trimS < e && text[trimS] == ' ') trimS++;
+        while (trimS < e && text[trimS].trim().isEmpty) trimS++;
         return (trimS, e);
       }
     }
