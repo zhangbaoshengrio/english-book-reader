@@ -1063,6 +1063,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   // Double-tap detection
   DateTime? _lastTapTime;
   Offset?   _lastTapPos;
+  bool _suppressNextTap = false;
   @override
   void initState() {
     super.initState();
@@ -1266,6 +1267,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
             // Double-tap: translate sentence at cursor position
             _lastTapTime = null;
             _lastTapPos = null;
+            _suppressNextTap = true; // prevent onTap word-lookup on this tap
             _longPressTimer?.cancel();
             _translateTimer?.cancel();
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1329,6 +1331,8 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
           contextMenuBuilder: (ctx, editableState) => const SizedBox.shrink(),
           onTapAlwaysCalled: true,
           onTap: () {
+            // Double-tap fires onTap for its second press — skip word lookup.
+            if (_suppressNextTap) { _suppressNextTap = false; return; }
             final offset = _ctrl.selection.baseOffset;
             if (offset < 0) return;
 
