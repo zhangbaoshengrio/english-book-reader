@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import '../models/definition.dart';
@@ -1015,6 +1016,16 @@ class _AiWordPanel extends StatelessWidget {
   });
 
   static const _aiColor = Color(0xFF10A37F);
+  static final _mdStyle = MarkdownStyleSheet(
+    p: const TextStyle(fontSize: 14, color: AppTheme.textPrimary, height: 1.6),
+    h1: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+    h2: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+    h3: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+    strong: const TextStyle(fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+    em: const TextStyle(fontStyle: FontStyle.italic, color: AppTheme.textPrimary),
+    code: const TextStyle(fontSize: 13, fontFamily: 'monospace', color: AppTheme.primary),
+    listBullet: const TextStyle(fontSize: 14, color: AppTheme.textSecondary),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -1095,11 +1106,7 @@ class _AiWordPanel extends StatelessWidget {
               ),
             ]),
             const SizedBox(height: 8),
-            Text(result!,
-                style: const TextStyle(
-                    fontSize: 14,
-                    color: AppTheme.textPrimary,
-                    height: 1.6)),
+            MarkdownBody(data: result!, styleSheet: _mdStyle),
           ],
         ),
       ),
