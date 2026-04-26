@@ -70,6 +70,25 @@ class TtsService {
     }
   }
 
+  /// Speak text using the dedicated AI-result voice engine.
+  static Future<void> speakAi(String text) async {
+    final engine = await VoiceEngineService.getAiEngine();
+    if (engine != null) {
+      if (engine.type == VoiceEngineType.builtinTts) {
+        _speed = engine.speed;
+        _ready = false;
+      } else {
+        final bytes = await VoiceEngineService.fetchAudio(text, engine);
+        if (bytes != null && bytes.isNotEmpty) {
+          await _playBytes(bytes);
+          return;
+        }
+        // Fall through to builtin on failure
+      }
+    }
+    await _speakBuiltin(text);
+  }
+
   static Future<void> stop() async {
     await _tts.stop();
     await _player.stop();

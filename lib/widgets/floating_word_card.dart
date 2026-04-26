@@ -8,6 +8,7 @@ import '../models/dict_source.dart';
 import '../services/tts_service.dart';
 import '../services/dictionary_service.dart';
 import '../services/ai_service.dart';
+import '../services/voice_engine_service.dart';
 import '../theme/app_theme.dart';
 import '../screens/dict_manager_screen.dart';
 
@@ -92,6 +93,10 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
         _aiResult = '查询失败，请检查 API Key 或网络连接。';
         _aiFetching = false;
       });
+    } else {
+      // Auto-speak AI result if enabled
+      final autoSpeak = await VoiceEngineService.getAiAutoSpeak();
+      if (autoSpeak && mounted) TtsService.speakAi(accumulated);
     }
   }
 
@@ -1093,7 +1098,7 @@ class _AiWordPanelState extends State<_AiWordPanel> {
       if (mounted) setState(() => _speaking = false);
     } else {
       setState(() => _speaking = true);
-      await TtsService.speak(widget.result!);
+      await TtsService.speakAi(widget.result!);
       if (mounted) setState(() => _speaking = false);
     }
   }

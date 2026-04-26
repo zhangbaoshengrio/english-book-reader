@@ -3,6 +3,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../services/ai_service.dart';
 import '../services/translation_service.dart';
 import '../services/tts_service.dart';
+import '../services/voice_engine_service.dart';
 import '../theme/app_theme.dart';
 
 const _kToolbarItems = [
@@ -79,6 +80,9 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
       }
       if (mounted && accumulated.isEmpty) {
         setState(() => _results[engineId] = '');
+      } else if (mounted && accumulated.isNotEmpty) {
+        final autoSpeak = await VoiceEngineService.getAiAutoSpeak();
+        if (autoSpeak && mounted) TtsService.speakAi(accumulated);
       }
     } else {
       final result =
@@ -417,7 +421,7 @@ class _AiResultBlockState extends State<_AiResultBlock> {
       if (mounted) setState(() => _speaking = false);
     } else {
       setState(() => _speaking = true);
-      await TtsService.speak(widget.analysis!);
+      await TtsService.speakAi(widget.analysis!);
       if (mounted) setState(() => _speaking = false);
     }
   }

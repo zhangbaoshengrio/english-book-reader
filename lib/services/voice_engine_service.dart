@@ -142,9 +142,11 @@ class VoiceEngine {
 // ── Service ───────────────────────────────────────────────────────────────────
 
 class VoiceEngineService {
-  static const _kKey = 'voice_engines_config';
-  static const _kActiveKey = 'active_voice_engine';
-  static const _kAutoSpeakKey = 'voice_auto_speak';
+  static const _kKey            = 'voice_engines_config';
+  static const _kActiveKey      = 'active_voice_engine';
+  static const _kAutoSpeakKey   = 'voice_auto_speak';
+  static const _kAiEngineKey    = 'ai_voice_engine_id';
+  static const _kAiAutoSpeakKey = 'ai_voice_auto_speak';
 
   // ── Persistence ────────────────────────────────────────────────────────────
 
@@ -189,6 +191,36 @@ class VoiceEngineService {
   static Future<void> setAutoSpeak(bool v) async {
     final p = await SharedPreferences.getInstance();
     await p.setBool(_kAutoSpeakKey, v);
+  }
+
+  static Future<String> getAiEngineId() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_kAiEngineKey) ?? 'builtin';
+  }
+
+  static Future<void> setAiEngineId(String id) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kAiEngineKey, id);
+  }
+
+  static Future<bool> getAiAutoSpeak() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getBool(_kAiAutoSpeakKey) ?? false;
+  }
+
+  static Future<void> setAiAutoSpeak(bool v) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kAiAutoSpeakKey, v);
+  }
+
+  static Future<VoiceEngine?> getAiEngine() async {
+    final id = await getAiEngineId();
+    final engines = await getEngines();
+    try {
+      return engines.firstWhere((e) => e.id == id);
+    } catch (_) {
+      return engines.isNotEmpty ? engines.first : null;
+    }
   }
 
   static Future<void> saveEngineSpeed(String engineId, double speed) async {

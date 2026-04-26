@@ -14,8 +14,10 @@ class VoiceEngineScreen extends StatefulWidget {
 
 class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
   List<VoiceEngine> _engines = [];
-  String _activeId = 'builtin';
-  bool _autoSpeak = false;
+  String _activeId    = 'builtin';
+  bool _autoSpeak     = false;
+  String _aiEngineId  = 'builtin';
+  bool _aiAutoSpeak   = false;
   bool _loading = true;
 
   @override
@@ -29,13 +31,17 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
       VoiceEngineService.getEngines(),
       VoiceEngineService.getActiveEngineId(),
       VoiceEngineService.getAutoSpeak(),
+      VoiceEngineService.getAiEngineId(),
+      VoiceEngineService.getAiAutoSpeak(),
     ]);
     if (mounted) {
       setState(() {
-        _engines = results[0] as List<VoiceEngine>;
-        _activeId = results[1] as String;
-        _autoSpeak = results[2] as bool;
-        _loading = false;
+        _engines     = results[0] as List<VoiceEngine>;
+        _activeId    = results[1] as String;
+        _autoSpeak   = results[2] as bool;
+        _aiEngineId  = results[3] as String;
+        _aiAutoSpeak = results[4] as bool;
+        _loading     = false;
       });
     }
   }
@@ -133,6 +139,28 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
     );
   }
 
+  void _showAiEnginePicker() {
+    showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('AI 朗读引擎',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        children: _engines.map((e) => RadioListTile<String>(
+          value: e.id,
+          groupValue: _aiEngineId,
+          activeColor: AppTheme.primary,
+          title: Text(e.name, style: const TextStyle(fontSize: 14)),
+          onChanged: (v) {
+            Navigator.pop(ctx);
+            if (v == null) return;
+            setState(() => _aiEngineId = v);
+            VoiceEngineService.setAiEngineId(v);
+          },
+        )).toList(),
+      ),
+    );
+  }
+
   void _showAddSheet({VoiceEngine? editing}) {
     final nameCtrl = TextEditingController(text: editing?.name ?? '');
     final urlCtrl  = TextEditingController(text: editing?.urlTemplate ?? '');
@@ -210,6 +238,63 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
                       // Sync legacy key so reader_screen still works
                       SettingsService.setAutoSpeak(v);
                     },
+                  ),
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 0),
+                // ── AI 结果朗读 section ─────────────────────────────────────
+                Container(
+                  color: Colors.white,
+                  child: SwitchListTile(
+                    title: const Text('AI 结果自动朗读',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                    subtitle: const Text('AI 回复完成后自动朗读内容',
+                        style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                    value: _aiAutoSpeak,
+                    activeTrackColor: AppTheme.primary.withValues(alpha: 0.4),
+                    activeThumbColor: AppTheme.primary,
+                    onChanged: (v) {
+                      setState(() => _aiAutoSpeak = v);
+                      VoiceEngineService.setAiAutoSpeak(v);
+                    },
+                  ),
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 0),
+                GestureDetector(
+                  onTap: _showAiEnginePicker,
+                  child: Container(
+                    color: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    child: Row(children: [
+                      const Icon(Icons.record_voice_over_rounded,
+                          size: 20, color: AppTheme.textSecondary),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('AI 朗读引擎',
+                                style: TextStyle(
+                                    fontSize: 15, fontWeight: FontWeight.w500)),
+                            SizedBox(height: 2),
+                            Text('用于朗读 AI 分析结果的语音引擎',
+                                style: TextStyle(
+                                    fontSize: 13, color: AppTheme.textSecondary)),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        _engines
+                            .where((e) => e.id == _aiEngineId)
+                            .map((e) => e.name)
+                            .firstOrNull ?? '系统内置',
+                        style: const TextStyle(
+                            fontSize: 14, color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.chevron_right_rounded,
+                          size: 20, color: AppTheme.textTertiary),
+                    ]),
                   ),
                 ),
                 const Divider(height: 1),
