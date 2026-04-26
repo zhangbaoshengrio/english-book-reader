@@ -436,6 +436,12 @@ class _AiResultBlockState extends State<_AiResultBlock> {
   }
 
   @override
+  void dispose() {
+    if (_speaking) TtsService.stop();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final loading = widget.analysis == null;
     final failed  = !loading && widget.analysis!.isEmpty;

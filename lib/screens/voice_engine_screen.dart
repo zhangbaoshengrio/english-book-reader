@@ -121,6 +121,12 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
               final creds = {
                 for (final f in fields) f.key: controllers[f.key]!.text.trim(),
               };
+              // Fill default baseUrl when left empty
+              if ((creds['baseUrl'] ?? '').isEmpty && engine.id == 'openai_tts') {
+                const defaultUrl = 'https://api.openai.com/v1/audio/speech';
+                creds['baseUrl'] = defaultUrl;
+                controllers['baseUrl']?.text = defaultUrl;
+              }
               final nav = Navigator.of(ctx);
               await VoiceEngineService.saveCredentials(engine.id, creds);
               // Save voice selection

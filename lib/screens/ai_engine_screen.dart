@@ -456,10 +456,19 @@ class _ConfigSheetState extends State<_ConfigSheet> {
                       borderRadius: BorderRadius.circular(10)),
                 ),
                 onPressed: () {
+                  var baseUrl = _baseUrlCtrl.text.trim();
+                  if (baseUrl.isEmpty) {
+                    baseUrl = switch (widget.engine.id) {
+                      'chatgpt'  => 'https://api.openai.com/v1/chat/completions',
+                      'deepseek' => 'https://api.deepseek.com/chat/completions',
+                      _          => '',
+                    };
+                    if (baseUrl.isNotEmpty) _baseUrlCtrl.text = baseUrl;
+                  }
                   final updated = widget.engine.copyWith(
                     apiKey: _keyCtrl.text.trim(),
                     model: _selectedModel,
-                    baseUrl: _baseUrlCtrl.text.trim(),
+                    baseUrl: baseUrl,
                     enabled: _keyCtrl.text.trim().isNotEmpty
                         ? widget.engine.enabled
                         : false,

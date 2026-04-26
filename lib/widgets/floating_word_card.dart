@@ -1114,6 +1114,12 @@ class _AiWordPanelState extends State<_AiWordPanel> {
   }
 
   @override
+  void dispose() {
+    if (_speaking) TtsService.stop();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     if (widget.fetching) {
       return const Padding(
