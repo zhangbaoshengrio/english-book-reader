@@ -1057,6 +1057,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   Timer? _translateTimer;
   Timer? _suppressOutsideTimer;
   Timer? _longPressTimer;
+  Offset? _longPressDownPos;
   bool _suppressListener = false;
   bool _suppressOutside = false;
   @override
@@ -1217,25 +1218,34 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     // phrases where the TextField's own LongPressGestureRecognizer would win.
     return Listener(
       behavior: HitTestBehavior.translucent,
-      onPointerDown: (_) {
+      onPointerDown: (event) {
         _longPressTimer?.cancel();
-        // Snapshot the cursor offset immediately — TextField positions the cursor
-        // on pointer-down, so this gives the correct character under the finger
-        // without any manual coordinate conversion (which can be off-by-line).
-        final downOffset = _ctrl.selection.baseOffset;
+        _longPressDownPos = event.position;
         _longPressTimer = Timer(const Duration(milliseconds: 500), () {
-          if (!mounted) return;
+          if (!mounted || _longPressDownPos == null) return;
           _translateTimer?.cancel();
-          _handleLongPress(downOffset);
+          // Read cursor offset inside the timer (500 ms after pointer-down):
+          // by this time TextField has positioned the cursor at the tapped
+          // character, so baseOffset reflects the actual finger position.
+          final offset = _ctrl.selection.baseOffset;
+          if (offset >= 0) _handleLongPress(offset);
         });
       },
-      onPointerUp: (_) => _longPressTimer?.cancel(),
-      onPointerCancel: (_) => _longPressTimer?.cancel(),
+      onPointerUp: (_) {
+        _longPressTimer?.cancel();
+        _longPressDownPos = null;
+      },
+      onPointerCancel: (_) {
+        _longPressTimer?.cancel();
+        _longPressDownPos = null;
+      },
       onPointerMove: (event) {
-        // Cancel long-press if finger moves more than 18 logical pixels.
-        if (_longPressTimer?.isActive == true &&
-            event.delta.distance > 3) {
-          _longPressTimer?.cancel();
+        // Cancel long-press only when finger drifts >10 px from touch-down.
+        if (_longPressDownPos != null) {
+          if ((event.position - _longPressDownPos!).distance > 10) {
+            _longPressTimer?.cancel();
+            _longPressDownPos = null;
+          }
         }
       },
       child: TextField(
