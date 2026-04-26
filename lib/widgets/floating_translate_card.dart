@@ -381,7 +381,7 @@ class _ResultBlock extends StatelessWidget {
 
 // ── AI result block (markdown, inline with translation results) ───────────────
 
-class _AiResultBlock extends StatelessWidget {
+class _AiResultBlock extends StatefulWidget {
   final TranslationEngine engine;
   final String? analysis; // null = loading
   final bool isLast;
@@ -391,6 +391,13 @@ class _AiResultBlock extends StatelessWidget {
     required this.analysis,
     required this.isLast,
   });
+
+  @override
+  State<_AiResultBlock> createState() => _AiResultBlockState();
+}
+
+class _AiResultBlockState extends State<_AiResultBlock> {
+  bool _speaking = false;
 
   static const _aiColor = Color(0xFF10A37F);
 
@@ -404,14 +411,34 @@ class _AiResultBlock extends StatelessWidget {
     listBullet: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
   );
 
+  Future<void> _toggleSpeak() async {
+    if (_speaking) {
+      await TtsService.stop();
+      if (mounted) setState(() => _speaking = false);
+    } else {
+      setState(() => _speaking = true);
+      await TtsService.speak(widget.analysis!);
+      if (mounted) setState(() => _speaking = false);
+    }
+  }
+
+  @override
+  void didUpdateWidget(_AiResultBlock old) {
+    super.didUpdateWidget(old);
+    if (old.analysis != widget.analysis && _speaking) {
+      TtsService.stop();
+      _speaking = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final loading = analysis == null;
-    final failed  = !loading && analysis!.isEmpty;
+    final loading = widget.analysis == null;
+    final failed  = !loading && widget.analysis!.isEmpty;
 
     return Container(
       decoration: BoxDecoration(
-        border: isLast
+        border: widget.isLast
             ? null
             : const Border(bottom: BorderSide(color: Color(0xFFEEEEEE))),
       ),
@@ -419,7 +446,7 @@ class _AiResultBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Engine name tag with AI icon
+          // Engine name tag with AI icon + speak button
           Row(children: [
             const Icon(Icons.auto_awesome_rounded, size: 11, color: _aiColor),
             const SizedBox(width: 4),
@@ -429,10 +456,20 @@ class _AiResultBlock extends StatelessWidget {
                 color: _aiColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: Text(engine.name,
+              child: Text(widget.engine.name,
                   style: const TextStyle(
                       fontSize: 10, fontWeight: FontWeight.w700, color: _aiColor)),
             ),
+            const Spacer(),
+            if (!loading && !failed)
+              GestureDetector(
+                onTap: _toggleSpeak,
+                child: Icon(
+                  _speaking ? Icons.stop_circle_rounded : Icons.volume_up_rounded,
+                  size: 16,
+                  color: _speaking ? Colors.redAccent : _aiColor.withValues(alpha: 0.6),
+                ),
+              ),
           ]),
           const SizedBox(height: 6),
           if (loading)
@@ -444,7 +481,7 @@ class _AiResultBlock extends StatelessWidget {
             const Text('分析失败，请检查 API Key 或网络连接。',
                 style: TextStyle(fontSize: 13, color: AppTheme.textTertiary))
           else
-            MarkdownBody(data: analysis!, styleSheet: _mdStyle),
+            MarkdownBody(data: widget.analysis!, styleSheet: _mdStyle),
         ],
       ),
     );

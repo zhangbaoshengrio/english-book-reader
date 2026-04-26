@@ -1049,7 +1049,7 @@ class _ExampleRowState extends State<_ExampleRow> {
 
 // ── AI word panel ──────────────────────────────────────────────────────────────
 
-class _AiWordPanel extends StatelessWidget {
+class _AiWordPanel extends StatefulWidget {
   final bool fetching;
   final String? result;
   final VoidCallback onFetch;
@@ -1068,6 +1068,13 @@ class _AiWordPanel extends StatelessWidget {
     required this.onUnstar,
   });
 
+  @override
+  State<_AiWordPanel> createState() => _AiWordPanelState();
+}
+
+class _AiWordPanelState extends State<_AiWordPanel> {
+  bool _speaking = false;
+
   static const _aiColor = Color(0xFF10A37F);
   static final _mdStyle = MarkdownStyleSheet(
     p: const TextStyle(fontSize: 14, color: AppTheme.textPrimary, height: 1.6),
@@ -1080,9 +1087,30 @@ class _AiWordPanel extends StatelessWidget {
     listBullet: const TextStyle(fontSize: 14, color: AppTheme.textSecondary),
   );
 
+  Future<void> _toggleSpeak() async {
+    if (_speaking) {
+      await TtsService.stop();
+      if (mounted) setState(() => _speaking = false);
+    } else {
+      setState(() => _speaking = true);
+      await TtsService.speak(widget.result!);
+      if (mounted) setState(() => _speaking = false);
+    }
+  }
+
+  @override
+  void didUpdateWidget(_AiWordPanel old) {
+    super.didUpdateWidget(old);
+    // Stop speaking if result changes (refresh)
+    if (old.result != widget.result && _speaking) {
+      TtsService.stop();
+      _speaking = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (fetching) {
+    if (widget.fetching) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
         child: Center(
@@ -1094,11 +1122,11 @@ class _AiWordPanel extends StatelessWidget {
       );
     }
 
-    if (result == null) {
+    if (widget.result == null) {
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
         child: GestureDetector(
-          onTap: onFetch,
+          onTap: widget.onFetch,
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 10),
             decoration: BoxDecoration(
@@ -1138,28 +1166,38 @@ class _AiWordPanel extends StatelessWidget {
                       fontWeight: FontWeight.w700)),
               const Spacer(),
               GestureDetector(
-                onTap: onRefresh,
+                onTap: widget.onRefresh,
                 child: Text('重新查询',
                     style: TextStyle(
                         fontSize: 11,
                         color: _aiColor.withValues(alpha: 0.7),
                         fontWeight: FontWeight.w600)),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
+              // Speak button
+              GestureDetector(
+                onTap: _toggleSpeak,
+                child: Icon(
+                  _speaking ? Icons.stop_circle_rounded : Icons.volume_up_rounded,
+                  size: 18,
+                  color: _speaking ? Colors.redAccent : _aiColor.withValues(alpha: 0.7),
+                ),
+              ),
+              const SizedBox(width: 8),
               // Star button
               GestureDetector(
-                onTap: isSaved ? onUnstar : onStar,
+                onTap: widget.isSaved ? widget.onUnstar : widget.onStar,
                 child: Icon(
-                  isSaved ? Icons.star_rounded : Icons.star_border_rounded,
+                  widget.isSaved ? Icons.star_rounded : Icons.star_border_rounded,
                   size: 22,
-                  color: isSaved
+                  color: widget.isSaved
                       ? const Color(0xFFFFBB00)
                       : AppTheme.textTertiary,
                 ),
               ),
             ]),
             const SizedBox(height: 8),
-            MarkdownBody(data: result!, styleSheet: _mdStyle),
+            MarkdownBody(data: widget.result!, styleSheet: _mdStyle),
           ],
         ),
       ),
