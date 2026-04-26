@@ -71,6 +71,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     switch (_theme) {
       case ReaderTheme.white: return Colors.white;
       case ReaderTheme.dark:  return const Color(0xFF1C1C1E);
+      case ReaderTheme.green: return AppTheme.readerBgGreen;
       default:                return AppTheme.readerBg;
     }
   }
@@ -1057,6 +1058,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   Timer? _translateTimer;
   Timer? _suppressOutsideTimer;
   Timer? _longPressTimer;
+  Timer? _wordTapTimer;
   Offset? _longPressDownPos;
   bool _suppressListener = false;
   bool _suppressOutside = false;
@@ -1137,6 +1139,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     _translateTimer?.cancel();
     _suppressOutsideTimer?.cancel();
     _longPressTimer?.cancel();
+    _wordTapTimer?.cancel();
     _ctrl.removeListener(_onSelectionChanged);
     _ctrl.dispose();
     _focusNode.dispose();
@@ -1268,6 +1271,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
             _lastTapTime = null;
             _lastTapPos = null;
             _suppressNextTap = true; // prevent onTap word-lookup on this tap
+            _wordTapTimer?.cancel();  // cancel any pending word-lookup from first tap
             _longPressTimer?.cancel();
             _translateTimer?.cancel();
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1336,19 +1340,46 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
             final offset = _ctrl.selection.baseOffset;
             if (offset < 0) return;
 
-            // ── Priority 1: highlighted PHRASE (multi-word) → translate overlay ────
-            final lower = widget.text.toLowerCase();
-            for (final entry in widget.vocabSet) {
-              if (!entry.contains(' ')) continue;
-              var searchFrom = 0;
-              while (true) {
-                final idx = lower.indexOf(entry, searchFrom);
-                if (idx < 0) break;
-                final end = idx + entry.length;
-                if (offset >= idx && offset < end) {
-                  final phrase = widget.text.substring(idx, end);
+            // Delay word/phrase lookup to allow double-tap cancellation.
+            // Must be > double-tap detection window (300 ms) to ensure the
+            // second pointerDown arrives in time to cancel this timer.
+            _wordTapTimer?.cancel();
+            _wordTapTimer = Timer(const Duration(milliseconds: 350), () {
+              if (!mounted) return;
+
+              // ── Priority 1: highlighted PHRASE (multi-word) → translate overlay ────
+              final lower = widget.text.toLowerCase();
+              for (final entry in widget.vocabSet) {
+                if (!entry.contains(' ')) continue;
+                var searchFrom = 0;
+                while (true) {
+                  final idx = lower.indexOf(entry, searchFrom);
+                  if (idx < 0) break;
+                  final end = idx + entry.length;
+                  if (offset >= idx && offset < end) {
+                    final phrase = widget.text.substring(idx, end);
+                    _suppressListener = true;
+                    _ctrl.selection = TextSelection(baseOffset: idx, extentOffset: end);
+                    _suppressListener = false;
+                    final anchor = _getSelectionAnchor();
+                    _suppressOutside = true;
+                    _suppressOutsideTimer?.cancel();
+                    _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+                      _suppressOutside = false;
+                    });
+                    widget.onTranslate(phrase, anchor);
+                    return;
+                  }
+                  searchFrom = idx + entry.length;
+                }
+              }
+
+              // ── Priority 2: any word (highlighted or not) → word lookup card ────────
+              for (final (start, end) in _wordRanges) {
+                if (offset >= start && offset <= end) {
+                  final word = widget.text.substring(start, end);
                   _suppressListener = true;
-                  _ctrl.selection = TextSelection(baseOffset: idx, extentOffset: end);
+                  _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
                   _suppressListener = false;
                   final anchor = _getSelectionAnchor();
                   _suppressOutside = true;
@@ -1356,31 +1387,12 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
                   _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
                     _suppressOutside = false;
                   });
-                  widget.onTranslate(phrase, anchor);
+                  widget.onWordTap(word, anchor);
                   return;
                 }
-                searchFrom = idx + entry.length;
               }
-            }
-
-            // ── Priority 2: any word (highlighted or not) → word lookup card ────────
-            for (final (start, end) in _wordRanges) {
-              if (offset >= start && offset <= end) {
-                final word = widget.text.substring(start, end);
-                _suppressListener = true;
-                _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
-                _suppressListener = false;
-                final anchor = _getSelectionAnchor();
-                _suppressOutside = true;
-                _suppressOutsideTimer?.cancel();
-                _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
-                  _suppressOutside = false;
-                });
-                widget.onWordTap(word, anchor);
-                return;
-              }
-            }
-            // Punctuation / non-word: do nothing.
+              // Punctuation / non-word: do nothing.
+            });
           },
           onTapOutside: (_) {
             if (_suppressOutside) return;

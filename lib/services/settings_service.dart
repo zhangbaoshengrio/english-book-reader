@@ -4,6 +4,7 @@ class ReaderTheme {
   static const paper = 'paper';
   static const white = 'white';
   static const dark  = 'dark';
+  static const green = 'green';
 }
 
 class PageTurnStyle {

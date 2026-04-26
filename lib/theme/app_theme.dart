@@ -14,6 +14,7 @@ class AppTheme {
   static const Color success       = Color(0xFF34C759);
   static const Color danger        = Color(0xFFFF3B30);
   static const Color readerBg      = Color(0xFFFDF8F0); // warm paper
+  static const Color readerBgGreen = Color(0xFFC7EDCC); // eye-care green
 
   static ThemeData get theme => ThemeData(
     useMaterial3: true,
