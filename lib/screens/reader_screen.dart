@@ -1060,6 +1060,9 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   Offset? _longPressDownPos;
   bool _suppressListener = false;
   bool _suppressOutside = false;
+  // Double-tap detection
+  DateTime? _lastTapTime;
+  Offset?   _lastTapPos;
   @override
   void initState() {
     super.initState();
@@ -1181,6 +1184,24 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     return (0, text.length);
   }
 
+  /// Double-tap: select and translate the sentence at [charOffset].
+  void _handleSentenceTap(int charOffset) {
+    if (charOffset < 0 || charOffset >= widget.text.length) return;
+    final (s, e) = _sentenceBoundsAt(widget.text, charOffset);
+    final sentence = widget.text.substring(s, e).trim();
+    if (sentence.isEmpty) return;
+    _suppressListener = true;
+    _ctrl.selection = TextSelection(baseOffset: s, extentOffset: e);
+    _suppressOutside = true;
+    _suppressOutsideTimer?.cancel();
+    _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+      _suppressOutside = false;
+      _suppressListener = false;
+    });
+    final anchor = _getSelectionAnchor();
+    widget.onTranslate(sentence, anchor);
+  }
+
   /// Long-press on word: show word lookup card.
   /// Only fires when the offset is inside a highlighted multi-word phrase/sentence.
   void _handleLongPress(int offset) {
@@ -1235,6 +1256,29 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (event) {
+        // ── Double-tap detection ─────────────────────────────────────────────
+        final now = DateTime.now();
+        final pos = event.position;
+        if (_lastTapTime != null && _lastTapPos != null) {
+          final dt = now.difference(_lastTapTime!).inMilliseconds;
+          final dist = (pos - _lastTapPos!).distance;
+          if (dt < 300 && dist < 40) {
+            // Double-tap: translate sentence at cursor position
+            _lastTapTime = null;
+            _lastTapPos = null;
+            _longPressTimer?.cancel();
+            _translateTimer?.cancel();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              final offset = _ctrl.selection.baseOffset;
+              _handleSentenceTap(offset);
+            });
+            return;
+          }
+        }
+        _lastTapTime = now;
+        _lastTapPos = pos;
+        // ── Long-press detection ─────────────────────────────────────────────
         _longPressTimer?.cancel();
         _longPressDownPos = event.position;
         _longPressTimer = Timer(const Duration(milliseconds: 500), () {

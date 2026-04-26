@@ -96,7 +96,7 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
     } else {
       // Auto-speak AI result if enabled
       final autoSpeak = await VoiceEngineService.getAiAutoSpeak();
-      if (autoSpeak && mounted) TtsService.speakAi(accumulated);
+      if (autoSpeak && mounted) TtsService.speakAi(_AiWordPanelState._stripMd(accumulated));
     }
   }
 
@@ -1098,7 +1098,7 @@ class _AiWordPanelState extends State<_AiWordPanel> {
       if (mounted) setState(() => _speaking = false);
     } else {
       setState(() => _speaking = true);
-      await TtsService.speakAi(widget.result!);
+      await TtsService.speakAi(_stripMd(widget.result!));
       if (mounted) setState(() => _speaking = false);
     }
   }
@@ -1115,9 +1115,18 @@ class _AiWordPanelState extends State<_AiWordPanel> {
 
   @override
   void dispose() {
-    if (_speaking) TtsService.stop();
+    TtsService.stop();
     super.dispose();
   }
+
+  static String _stripMd(String text) => text
+      .replaceAllMapped(RegExp(r'\*\*(.*?)\*\*'), (m) => m.group(1) ?? '')
+      .replaceAllMapped(RegExp(r'\*(.*?)\*'), (m) => m.group(1) ?? '')
+      .replaceAll(RegExp(r'#{1,6} ?'), '')
+      .replaceAllMapped(RegExp(r'`(.*?)`'), (m) => m.group(1) ?? '')
+      .replaceAll(RegExp(r'^\s*[-*+] ', multiLine: true), '')
+      .replaceAll(RegExp(r'^\s*\d+\. ', multiLine: true), '')
+      .trim();
 
   @override
   Widget build(BuildContext context) {
