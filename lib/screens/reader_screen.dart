@@ -45,6 +45,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   String _translateText = '';
   String _translateParaText = ''; // paragraph containing the selected phrase
   Offset _tapPos = Offset.zero;
+  // Which engine IDs are starred for the current translate text
+  Set<String> _translateStarredEngines = {};
 
   // Para keys — used to call selectWord / clearSelection on each paragraph
   final _paraKeys = <int, GlobalKey<_ReaderParagraphState>>{};
@@ -318,6 +320,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _removeOverlayOnly(); // don't clear paragraph selections
     _translateText = text.trim();
     _translateParaText = paraText;
+    // Reset per-engine starred state for new text
+    _translateStarredEngines = {};
 
     final size = MediaQuery.of(context).size;
     const cardW = 320.0;
@@ -351,10 +355,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
             onDismiss: _removeOverlay,
             onToolbarAction: (action, text) =>
                 _onSelectionAction(_selectionActionFromString(action), text),
-            isStarred: _vocabSet.contains(_translateText.toLowerCase()),
-            onStar: (phrase, translation) => _starPhrase(phrase, translation),
-            onUnstar: () => _unstar(_translateText),
-            onEdit: () => _editVocabEntry(_translateText),
+            starredEngineIds: _translateStarredEngines,
+            onStar: (phrase, translation, engineId) =>
+                _starPhrase(phrase, translation, engineId),
+            onUnstar: (engineId) => _unstarTranslate(_translateText, engineId),
+            onEdit: (engineId, translation) =>
+                _editTranslateEntry(_translateText, translation),
             autoSpeak: _autoSpeak,
           ),
         ),
@@ -401,7 +407,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _overlayEntry?.markNeedsBuild();
   }
 
-  Future<void> _starPhrase(String phrase, String translation) async {
+  Future<void> _starPhrase(String phrase, String translation, String engineId) async {
     // If the selected text itself ends with sentence punctuation it IS the sentence.
     // Otherwise extract the containing sentence from the paragraph.
     final endsWithPunct = RegExp(r'[.!?]$').hasMatch(phrase.trim());
@@ -417,8 +423,73 @@ class _ReaderScreenState extends State<ReaderScreen> {
       sentence: sentence,
       source: widget.book.title,
     ));
+    setState(() => _translateStarredEngines = {..._translateStarredEngines, engineId});
     await _refreshVocab();
     _overlayEntry?.markNeedsBuild();
+  }
+
+  Future<void> _unstarTranslate(String phrase, String engineId) async {
+    await DatabaseService.deleteWordByName(phrase);
+    setState(() {
+      _translateStarredEngines = {..._translateStarredEngines}..remove(engineId);
+    });
+    await _refreshVocab();
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  Future<void> _editTranslateEntry(String phrase, String translation) async {
+    final allWords = await DatabaseService.getAllWords();
+    final entry = allWords.firstWhere(
+      (e) => e.word.toLowerCase() == phrase.toLowerCase(),
+      orElse: () => VocabEntry(word: phrase, definition: '', chineseMeaning: translation, sentence: ''),
+    );
+
+    final phoneticCtrl = TextEditingController(text: entry.phonetic);
+    final posCtrl      = TextEditingController(text: entry.partOfSpeech);
+    final defCtrl      = TextEditingController(text: entry.definition);
+    final cnCtrl       = TextEditingController(text: entry.chineseMeaning.isNotEmpty ? entry.chineseMeaning : translation);
+    final sentCtrl     = TextEditingController(text: entry.sentence);
+
+    if (!mounted) return;
+    _removeOverlayOnly();
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: _EditVocabSheet(
+          word: phrase,
+          phoneticCtrl: phoneticCtrl,
+          posCtrl: posCtrl,
+          defCtrl: defCtrl,
+          cnCtrl: cnCtrl,
+          sentCtrl: sentCtrl,
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      await DatabaseService.addOrUpdateWord(VocabEntry(
+        id: entry.id,
+        word: entry.word,
+        phonetic: phoneticCtrl.text.trim(),
+        partOfSpeech: posCtrl.text.trim(),
+        definition: defCtrl.text.trim(),
+        chineseMeaning: cnCtrl.text.trim(),
+        sentence: sentCtrl.text.trim(),
+        source: entry.source.isNotEmpty ? entry.source : widget.book.title,
+        addedAt: entry.addedAt,
+      ));
+      await _refreshVocab();
+      _overlayEntry?.markNeedsBuild();
+    }
+
+    phoneticCtrl.dispose();
+    posCtrl.dispose();
+    defCtrl.dispose();
+    cnCtrl.dispose();
+    sentCtrl.dispose();
   }
 
   Future<void> _editVocabEntry(String word) async {
@@ -850,10 +921,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
           _tapPos = globalPos;
           _showTranslateOverlay(selectedText, paraText: text);
         },
-        onDoubleTap: (sentence, globalPos) {
-          _tapPos = globalPos;
-          _showTranslateOverlay(sentence, paraText: text);
-        },
         onSelectionAction: (action, selectedText) =>
             _onSelectionAction(action, selectedText),
         onTapOutside: () {},
@@ -963,7 +1030,6 @@ class _ReaderParagraph extends StatefulWidget {
   final void Function(String selectedText, Offset globalPos) onTranslate;
   final void Function(_SelectionAction action, String selectedText) onSelectionAction;
   final VoidCallback onTapOutside;
-  final void Function(String sentence, Offset globalPos)? onDoubleTap;
 
   const _ReaderParagraph({
     super.key,
@@ -978,7 +1044,6 @@ class _ReaderParagraph extends StatefulWidget {
     required this.onTranslate,
     required this.onSelectionAction,
     required this.onTapOutside,
-    this.onDoubleTap,
   });
 
   @override
@@ -991,11 +1056,8 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   late List<(int, int)> _wordRanges;
   Timer? _translateTimer;
   Timer? _suppressOutsideTimer;
-  Timer? _wordLookupTimer;  // delayed so double-tap can preempt it
   bool _suppressListener = false;
   bool _suppressOutside = false;
-  DateTime? _lastPtrDownTime;
-  Offset?   _lastPtrDownPos;
   @override
   void initState() {
     super.initState();
@@ -1068,7 +1130,6 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   void dispose() {
     _translateTimer?.cancel();
     _suppressOutsideTimer?.cancel();
-    _wordLookupTimer?.cancel();
     _ctrl.removeListener(_onSelectionChanged);
     _ctrl.dispose();
     _focusNode.dispose();
@@ -1117,107 +1178,125 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     return (0, text.length);
   }
 
-  /// Double-tap confirmed at cursor [offset]: select sentence + translate.
-  void _handleSentenceTap(int offset) {
-    if (widget.onDoubleTap == null) return;
-    final (start, end) = _sentenceBoundsAt(widget.text, offset);
-    final sentence = widget.text.substring(start, end).trim();
-    if (sentence.isEmpty) return;
+  /// Long-press on word: show word lookup card.
+  void _handleLongPress(Offset globalPos) {
+    // Convert global position to a character offset in the TextField.
+    final ro = context.findRenderObject();
+    RenderEditable? re;
+    void visit(RenderObject o) {
+      if (o is RenderEditable) { re = o; return; }
+      o.visitChildren(visit);
+    }
+    if (ro != null) visit(ro);
+    if (re == null) return;
 
-    // Visually select the sentence so the user can drag handles freely.
-    _suppressListener = true;
-    _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
-    _suppressListener = false;
+    final localPos = re!.globalToLocal(globalPos);
+    final TextPosition tp = re!.getPositionForPoint(localPos);
+    final offset = tp.offset;
 
-    final anchor = _getSelectionAnchor();
-    _suppressOutside = true;
-    _suppressOutsideTimer?.cancel();
-    _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
-      _suppressOutside = false;
-    });
-    widget.onDoubleTap!(sentence, anchor);
+    // Find which word range contains this offset.
+    for (final (start, end) in _wordRanges) {
+      if (offset >= start && offset <= end) {
+        final word = widget.text.substring(start, end);
+        _suppressListener = true;
+        _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
+        _suppressListener = false;
+        final anchor = _getSelectionAnchor();
+        _suppressOutside = true;
+        _suppressOutsideTimer?.cancel();
+        _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+          _suppressOutside = false;
+        });
+        widget.onWordTap(word, anchor);
+        return;
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Listener receives raw pointer events before the gesture arena, so we can
-    // reliably detect the *second* pointer-down of a double-tap even though
-    // TextField's internal DoubleTapGestureRecognizer consumes the second onTap.
-    return Listener(
+    // GestureDetector with translucent behavior sits alongside TextField gestures.
+    // onLongPressStart fires for word lookup; onTap handles highlighted-word translate.
+    return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onPointerDown: (event) {
-        final now = DateTime.now();
-        if (_lastPtrDownTime != null &&
-            now.difference(_lastPtrDownTime!) <
-                const Duration(milliseconds: 300) &&
-            _lastPtrDownPos != null &&
-            (event.position - _lastPtrDownPos!).distance < 40) {
-          // ── Second tap of a double-tap ─────────────────────────────────
-          _wordLookupTimer?.cancel();   // cancel pending single-tap word card
-          _lastPtrDownTime = null;      // reset for next gesture
-          // Run after the internal DoubleTap handler (which selects the word)
-          // so _ctrl.selection already reflects the tapped position.
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            _translateTimer?.cancel();
-            final sel = _ctrl.selection;
-            final offset = sel.isCollapsed ? sel.baseOffset : sel.start;
-            if (offset >= 0) _handleSentenceTap(offset);
-          });
-        } else {
-          _lastPtrDownTime = now;
-          _lastPtrDownPos = event.position;
-        }
+      onLongPressStart: (details) {
+        _translateTimer?.cancel();
+        _handleLongPress(details.globalPosition);
       },
       child: TextField(
-        controller: _ctrl,
-        focusNode: _focusNode,
-        readOnly: true,
-        maxLines: null,
-        enableInteractiveSelection: true,
-        style: TextStyle(
-          fontSize: widget.fontSize,
-          height: widget.lineHeight,
-          color: widget.textColor,
-          fontFamily: widget.fontFamily,
-          letterSpacing: 0.15,
-        ),
-        decoration: const InputDecoration(
-          border: InputBorder.none,
-          isDense: true,
-          contentPadding: EdgeInsets.zero,
-        ),
-        contextMenuBuilder: (ctx, editableState) => const SizedBox.shrink(),
-        onTapAlwaysCalled: true,
-        onTap: () {
-          final offset = _ctrl.selection.baseOffset;
-          if (offset < 0) return;
+          controller: _ctrl,
+          focusNode: _focusNode,
+          readOnly: true,
+          maxLines: null,
+          enableInteractiveSelection: true,
+          style: TextStyle(
+            fontSize: widget.fontSize,
+            height: widget.lineHeight,
+            color: widget.textColor,
+            fontFamily: widget.fontFamily,
+            letterSpacing: 0.15,
+          ),
+          decoration: const InputDecoration(
+            border: InputBorder.none,
+            isDense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+          contextMenuBuilder: (ctx, editableState) => const SizedBox.shrink(),
+          onTapAlwaysCalled: true,
+          onTap: () {
+            final offset = _ctrl.selection.baseOffset;
+            if (offset < 0) return;
 
-          // ── Single tap: expand to word, delay card so double-tap can cancel ─
-          for (final (start, end) in _wordRanges) {
-            if (offset >= start && offset <= end) {
-              final word = widget.text.substring(start, end);
-              _suppressListener = true;
-              _ctrl.selection =
-                  TextSelection(baseOffset: start, extentOffset: end);
-              _suppressListener = false;
-              final anchor = _getSelectionAnchor();
-              // 300 ms delay: if second pointer-down arrives first, the timer
-              // gets cancelled and sentence translation runs instead.
-              _wordLookupTimer?.cancel();
-              _wordLookupTimer =
-                  Timer(const Duration(milliseconds: 300), () {
-                if (mounted) widget.onWordTap(word, anchor);
-              });
-              return;
+            // ── Priority 1: highlighted PHRASE (multi-word) → translate overlay ────
+            final lower = widget.text.toLowerCase();
+            for (final entry in widget.vocabSet) {
+              if (!entry.contains(' ')) continue;
+              var searchFrom = 0;
+              while (true) {
+                final idx = lower.indexOf(entry, searchFrom);
+                if (idx < 0) break;
+                final end = idx + entry.length;
+                if (offset >= idx && offset < end) {
+                  final phrase = widget.text.substring(idx, end);
+                  _suppressListener = true;
+                  _ctrl.selection = TextSelection(baseOffset: idx, extentOffset: end);
+                  _suppressListener = false;
+                  final anchor = _getSelectionAnchor();
+                  _suppressOutside = true;
+                  _suppressOutsideTimer?.cancel();
+                  _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+                    _suppressOutside = false;
+                  });
+                  widget.onTranslate(phrase, anchor);
+                  return;
+                }
+                searchFrom = idx + entry.length;
+              }
             }
-          }
-          // Tapped on non-word area (space / punctuation)
-        },
-        onTapOutside: (_) {
-          if (_suppressOutside) return;
-          widget.onTapOutside();
-        },
+
+            // ── Priority 2: any word (highlighted or not) → word lookup card ────────
+            for (final (start, end) in _wordRanges) {
+              if (offset >= start && offset <= end) {
+                final word = widget.text.substring(start, end);
+                _suppressListener = true;
+                _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
+                _suppressListener = false;
+                final anchor = _getSelectionAnchor();
+                _suppressOutside = true;
+                _suppressOutsideTimer?.cancel();
+                _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+                  _suppressOutside = false;
+                });
+                widget.onWordTap(word, anchor);
+                return;
+              }
+            }
+            // Punctuation / non-word: do nothing.
+          },
+          onTapOutside: (_) {
+            if (_suppressOutside) return;
+            widget.onTapOutside();
+          },
       ),
     );
   }

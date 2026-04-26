@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/ai_service.dart';
 import '../services/settings_service.dart';
 import '../services/tts_service.dart';
 import '../services/voice_engine_service.dart';
@@ -499,7 +500,7 @@ class _VoiceBadge extends StatelessWidget {
 
 // ── Credential config sheet ────────────────────────────────────────────────────
 
-class _CredentialSheet extends StatelessWidget {
+class _CredentialSheet extends StatefulWidget {
   final VoiceEngine engine;
   final List<VoiceCredentialField> fields;
   final Map<String, TextEditingController> controllers;
@@ -517,6 +518,40 @@ class _CredentialSheet extends StatelessWidget {
   });
 
   @override
+  State<_CredentialSheet> createState() => _CredentialSheetState();
+}
+
+class _CredentialSheetState extends State<_CredentialSheet> {
+  bool _syncing = false;
+  String? _syncMsg; // null=idle, '✓ ...'=success, '✗ ...'=fail
+
+  Future<void> _syncFromAi() async {
+    setState(() { _syncing = true; _syncMsg = null; });
+    try {
+      final engines = await AiService.getEngines();
+      final chatgpt = engines.where((e) => e.id == 'chatgpt').firstOrNull;
+      if (chatgpt == null || chatgpt.apiKey.isEmpty) {
+        setState(() { _syncing = false; _syncMsg = '✗ 未找到 ChatGPT 配置'; });
+        return;
+      }
+      widget.controllers['apiKey']?.text = chatgpt.apiKey;
+      if (chatgpt.baseUrl.isNotEmpty) {
+        // Convert chat completions URL → audio/speech URL if it looks like OpenAI compatible
+        var ttsBase = chatgpt.baseUrl;
+        if (ttsBase.endsWith('/chat/completions')) {
+          ttsBase = ttsBase.replaceAll('/chat/completions', '/audio/speech');
+        } else if (ttsBase.endsWith('/v1')) {
+          ttsBase = '$ttsBase/audio/speech';
+        }
+        widget.controllers['baseUrl']?.text = ttsBase;
+      }
+      setState(() { _syncing = false; _syncMsg = '✓ 已同步'; });
+    } catch (_) {
+      setState(() { _syncing = false; _syncMsg = '✗ 同步失败'; });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     const labelStyle = TextStyle(
         fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600);
@@ -529,6 +564,12 @@ class _CredentialSheet extends StatelessWidget {
       filled: true,
       fillColor: Color(0xFFF8F8F8),
     );
+
+    // Fields to render in the generic loop (skip model + baseUrl — rendered separately)
+    final loopFields = widget.fields
+        .where((f) => f.key != 'baseUrl' && f.key != 'model')
+        .toList();
+    final baseUrlField = widget.fields.where((f) => f.key == 'baseUrl').firstOrNull;
 
     return Container(
       decoration: const BoxDecoration(
@@ -551,7 +592,7 @@ class _CredentialSheet extends StatelessWidget {
               ),
             ),
             Row(children: [
-              Text('配置 ${engine.name}',
+              Text('配置 ${widget.engine.name}',
                   style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
               const Spacer(),
               GestureDetector(
@@ -564,11 +605,11 @@ class _CredentialSheet extends StatelessWidget {
                 style: TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
             const SizedBox(height: 20),
 
-            for (final field in fields) ...[
+            for (final field in loopFields) ...[
               Text(field.label, style: labelStyle),
               const SizedBox(height: 6),
               TextField(
-                controller: controllers[field.key],
+                controller: widget.controllers[field.key],
                 decoration: dec.copyWith(hintText: field.hint),
                 style: const TextStyle(fontSize: 14),
                 obscureText: field.key.toLowerCase().contains('key'),
@@ -576,17 +617,60 @@ class _CredentialSheet extends StatelessWidget {
               const SizedBox(height: 14),
             ],
 
+            // Model picker (OpenAI only: presets + free input)
+            if (widget.engine.id == 'openai_tts') ...[
+              const Text('模型', style: labelStyle),
+              const SizedBox(height: 6),
+              // Preset chips
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: VoiceEngine.openaiTtsModels.map((m) {
+                  final selected = widget.controllers['model']?.text == m;
+                  return GestureDetector(
+                    onTap: () => setState(() => widget.controllers['model']?.text = m),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? AppTheme.primary.withValues(alpha: 0.12)
+                            : const Color(0xFFF3F3F3),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: selected ? AppTheme.primary : Colors.transparent,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Text(m,
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: selected ? AppTheme.primary : AppTheme.textSecondary)),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: widget.controllers['model'],
+                decoration: dec.copyWith(hintText: 'tts-1（可输入自定义模型名）'),
+                style: const TextStyle(fontSize: 14),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 14),
+            ],
+
             // Voice picker (OpenAI only)
-            if (engine.id == 'openai_tts') ...[
+            if (widget.engine.id == 'openai_tts') ...[
               const Text('音色', style: labelStyle),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: VoiceEngine.openaiVoices.map((v) {
-                  final selected = v == selectedVoice;
+                  final selected = v == widget.selectedVoice;
                   return GestureDetector(
-                    onTap: () => onVoiceChanged(v),
+                    onTap: () => widget.onVoiceChanged(v),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                       decoration: BoxDecoration(
@@ -611,6 +695,51 @@ class _CredentialSheet extends StatelessWidget {
               const SizedBox(height: 14),
             ],
 
+            // Base URL field (OpenAI only, rendered after voice picker)
+            if (baseUrlField != null) ...[
+              Text(baseUrlField.label, style: labelStyle),
+              const SizedBox(height: 6),
+              TextField(
+                controller: widget.controllers['baseUrl'],
+                decoration: dec.copyWith(hintText: baseUrlField.hint),
+                style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                keyboardType: TextInputType.url,
+              ),
+              const SizedBox(height: 8),
+              // Sync from AI engine row
+              Row(children: [
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.primary,
+                    side: const BorderSide(color: AppTheme.primary),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _syncing ? null : _syncFromAi,
+                  icon: _syncing
+                      ? const SizedBox(width: 14, height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: AppTheme.primary))
+                      : const Icon(Icons.sync_rounded, size: 16),
+                  label: Text(_syncing ? '同步中…' : '从 AI 引擎同步 Key',
+                      style: const TextStyle(fontSize: 13)),
+                ),
+                const SizedBox(width: 10),
+                if (_syncMsg != null)
+                  Expanded(
+                    child: Text(
+                      _syncMsg!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _syncMsg!.startsWith('✓')
+                            ? Colors.green.shade600
+                            : Colors.red.shade600,
+                      ),
+                    ),
+                  ),
+              ]),
+              const SizedBox(height: 14),
+            ],
+
             const SizedBox(height: 6),
             SizedBox(
               width: double.infinity,
@@ -620,7 +749,7 @@ class _CredentialSheet extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
-                onPressed: onSave,
+                onPressed: widget.onSave,
                 child: const Text('保存',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
               ),

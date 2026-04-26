@@ -124,10 +124,14 @@ class VoiceEngine {
 
   static const Map<String, List<VoiceCredentialField>> credentialFields = {
     'openai_tts': [
-      VoiceCredentialField(key: 'apiKey', label: 'API Key', hint: 'sk-...'),
-      VoiceCredentialField(key: 'model',  label: '模型',    hint: 'tts-1 或 tts-1-hd'),
+      VoiceCredentialField(key: 'apiKey',  label: 'API Key', hint: 'sk-...'),
+      VoiceCredentialField(key: 'model',   label: '模型',    hint: 'tts-1'),
+      VoiceCredentialField(key: 'baseUrl', label: '接口',    hint: 'https://api.openai.com/v1/audio/speech'),
     ],
   };
+
+  // OpenAI TTS preset models
+  static const List<String> openaiTtsModels = ['tts-1', 'tts-1-hd'];
 
   // OpenAI available voices
   static const List<String> openaiVoices = [
@@ -281,9 +285,12 @@ class VoiceEngineService {
         ? engine.credentials['model']!
         : 'tts-1';
     final voice = engine.voiceParam.isNotEmpty ? engine.voiceParam : 'alloy';
+    final baseUrl = engine.credentials['baseUrl']?.isNotEmpty == true
+        ? engine.credentials['baseUrl']!
+        : 'https://api.openai.com/v1/audio/speech';
     try {
       final resp = await http.post(
-        Uri.parse('https://api.openai.com/v1/audio/speech'),
+        Uri.parse(baseUrl),
         headers: {
           'Authorization': 'Bearer $apiKey',
           'Content-Type': 'application/json',

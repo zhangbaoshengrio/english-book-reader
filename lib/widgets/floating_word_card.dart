@@ -462,6 +462,15 @@ class _CustomDictContent extends StatelessWidget {
     final saved = savedDefinitionText ?? '';
     final savedPfx = saved.length > 60 ? saved.substring(0, 60) : saved;
 
+    // Sort: starred definition first
+    if (savedPfx.isNotEmpty) {
+      defs.sort((a, b) {
+        final aStarred = a.text.contains(savedPfx) ? 0 : 1;
+        final bStarred = b.text.contains(savedPfx) ? 0 : 1;
+        return aStarred.compareTo(bStarred);
+      });
+    }
+
     return ConstrainedBox(
       constraints: BoxConstraints(
           maxHeight: MediaQuery.of(context).size.height * 0.36),
