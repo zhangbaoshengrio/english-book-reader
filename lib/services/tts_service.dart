@@ -49,6 +49,9 @@ class TtsService {
     await _tts.speak(text);
   }
 
+  /// Play raw audio bytes directly (for preview use).
+  static Future<void> playBytes(List<int> bytes) => _playBytes(bytes);
+
   static Future<void> _playBytes(List<int> bytes) async {
     String? path;
     try {

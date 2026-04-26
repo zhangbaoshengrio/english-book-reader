@@ -32,6 +32,7 @@ class VoiceEngine {
   final String urlTemplate; // customUrl only
   final String voiceParam;  // selected voice/model param
   final double speed;       // builtin: 0.3-1.5, openai: 0.25-4.0
+  final String style;       // speaking instructions (gpt-4o-mini-tts)
 
   bool get isBuiltin => type == VoiceEngineType.builtinTts;
 
@@ -44,6 +45,7 @@ class VoiceEngine {
     this.urlTemplate = '',
     this.voiceParam = '',
     this.speed = 1.0,
+    this.style = '',
   });
 
   VoiceEngine copyWith({
@@ -55,6 +57,7 @@ class VoiceEngine {
     String? urlTemplate,
     String? voiceParam,
     double? speed,
+    String? style,
   }) => VoiceEngine(
     id:          id          ?? this.id,
     name:        name        ?? this.name,
@@ -64,6 +67,7 @@ class VoiceEngine {
     urlTemplate: urlTemplate ?? this.urlTemplate,
     voiceParam:  voiceParam  ?? this.voiceParam,
     speed:       speed       ?? this.speed,
+    style:       style       ?? this.style,
   );
 
   Map<String, dynamic> toJson() => {
@@ -75,6 +79,7 @@ class VoiceEngine {
     'urlTemplate': urlTemplate,
     'voiceParam':  voiceParam,
     'speed':       speed,
+    'style':       style,
   };
 
   factory VoiceEngine.fromJson(Map<String, dynamic> j) {
@@ -97,6 +102,7 @@ class VoiceEngine {
       urlTemplate: j['urlTemplate'] as String? ?? '',
       voiceParam:  j['voiceParam']  as String? ?? '',
       speed:       (j['speed'] as num?)?.toDouble() ?? defaultSpeed,
+      style:       j['style']       as String? ?? '',
     );
   }
 
@@ -131,12 +137,38 @@ class VoiceEngine {
   };
 
   // OpenAI TTS preset models
-  static const List<String> openaiTtsModels = ['tts-1', 'tts-1-hd'];
+  static const List<String> openaiTtsModels = ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts'];
 
   // OpenAI available voices
   static const List<String> openaiVoices = [
-    'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer',
+    'alloy', 'ash', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer',
   ];
+
+  // OpenAI TTS speaking style presets (name → instructions)
+  static const List<Map<String, String>> openaiTtsStyles = [
+    {'name': '默认',       'instruction': ''},
+    {'name': '疯狂科学家', 'instruction': 'Speak like a mad scientist — manic, excitable, and full of wild enthusiasm.'},
+    {'name': '海岛',       'instruction': 'Speak with a relaxed, laid-back island vibe — unhurried, warm, and carefree.'},
+    {'name': '黑色电影侦探','instruction': 'Speak like a noir film detective — world-weary, cynical, and mysterious.'},
+    {'name': '机器人',     'instruction': 'Speak like a robot — flat, mechanical, and monotone with precise enunciation.'},
+    {'name': '健身教练',   'instruction': 'Speak like an enthusiastic fitness trainer — motivating, energetic, and pumped up.'},
+    {'name': '鉴赏家',     'instruction': 'Speak like a refined connoisseur — sophisticated, measured, and deeply knowledgeable.'},
+    {'name': '啦啦队长',   'instruction': 'Speak like a peppy cheerleader — upbeat, spirited, and full of positive energy.'},
+    {'name': '老式',       'instruction': 'Speak in an old-fashioned, formal manner — dignified, deliberate, and classic.'},
+    {'name': '冷静',       'instruction': 'Speak in a calm, measured tone — steady, composed, and reassuring.'},
+    {'name': '美食厨师',   'instruction': 'Speak like a passionate culinary chef — expressive, sensory, and full of flavor.'},
+    {'name': '耐心老师',   'instruction': 'Speak like a patient teacher — clear, encouraging, and easy to understand.'},
+    {'name': '宁静',       'instruction': 'Speak in a serene, peaceful tone — gentle, soft, and calming.'},
+    {'name': '牛仔',       'instruction': 'Speak like a rugged cowboy — drawling, laid-back, with a frontier spirit.'},
+  ];
+
+  /// Display name for a given instruction string (empty → "默认").
+  static String styleNameFor(String instruction) {
+    if (instruction.isEmpty) return '默认';
+    return openaiTtsStyles
+        .firstWhere((s) => s['instruction'] == instruction,
+            orElse: () => {'name': '自定义'})['name']!;
+  }
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
@@ -277,6 +309,18 @@ class VoiceEngineService {
     await saveEngines(engines);
   }
 
+  static Future<void> saveEngineVoiceStyle(String id,
+      {String? voice, String? style}) async {
+    final engines = await getEngines();
+    final idx = engines.indexWhere((e) => e.id == id);
+    if (idx < 0) return;
+    engines[idx] = engines[idx].copyWith(
+      voiceParam: voice ?? engines[idx].voiceParam,
+      style:      style ?? engines[idx].style,
+    );
+    await saveEngines(engines);
+  }
+
   static Future<void> deleteEngine(String id) async {
     final engines = await getEngines();
     engines.removeWhere((e) => e.id == id);
@@ -333,6 +377,7 @@ class VoiceEngineService {
           'voice': voice,
           'response_format': 'mp3',
           'speed': engine.speed.clamp(0.25, 4.0),
+          if (engine.style.isNotEmpty) 'instructions': engine.style,
         }),
       ).timeout(const Duration(seconds: 20));
       if (resp.statusCode == 200) return resp.bodyBytes;
