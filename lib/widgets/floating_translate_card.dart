@@ -82,7 +82,7 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
         setState(() => _results[engineId] = '');
       } else if (mounted && accumulated.isNotEmpty) {
         final autoSpeak = await VoiceEngineService.getAiAutoSpeak();
-        if (autoSpeak && mounted) TtsService.speakAi(_AiResultBlock._stripMd(accumulated));
+        if (autoSpeak && mounted) TtsService.speakAi(_AiResultBlockState._stripMd(accumulated));
       }
     } else {
       final result =
