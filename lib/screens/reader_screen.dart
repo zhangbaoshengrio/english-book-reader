@@ -1056,6 +1056,8 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   late List<(int, int)> _wordRanges;
   Timer? _translateTimer;
   Timer? _suppressOutsideTimer;
+  Timer? _longPressTimer;
+  Offset? _longPressDownPos;
   bool _suppressListener = false;
   bool _suppressOutside = false;
   @override
@@ -1130,6 +1132,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   void dispose() {
     _translateTimer?.cancel();
     _suppressOutsideTimer?.cancel();
+    _longPressTimer?.cancel();
     _ctrl.removeListener(_onSelectionChanged);
     _ctrl.dispose();
     _focusNode.dispose();
@@ -1200,12 +1203,15 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
         final word = widget.text.substring(start, end);
         _suppressListener = true;
         _ctrl.selection = TextSelection(baseOffset: start, extentOffset: end);
-        _suppressListener = false;
+        // Keep _suppressListener = true until timer fires — prevents any
+        // selection changes from TextField's internal long-press handling
+        // from starting the translate timer.
         final anchor = _getSelectionAnchor();
         _suppressOutside = true;
         _suppressOutsideTimer?.cancel();
         _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
           _suppressOutside = false;
+          _suppressListener = false;
         });
         widget.onWordTap(word, anchor);
         return;
@@ -1215,13 +1221,37 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
 
   @override
   Widget build(BuildContext context) {
-    // GestureDetector with translucent behavior sits alongside TextField gestures.
-    // onLongPressStart fires for word lookup; onTap handles highlighted-word translate.
-    return GestureDetector(
+    // Listener sits outside the gesture arena — always receives pointer events
+    // regardless of what the TextField's internal recognizers do.
+    // We implement long-press detection here so it fires even inside highlighted
+    // phrases where the TextField's own LongPressGestureRecognizer would win.
+    return Listener(
       behavior: HitTestBehavior.translucent,
-      onLongPressStart: (details) {
-        _translateTimer?.cancel();
-        _handleLongPress(details.globalPosition);
+      onPointerDown: (event) {
+        _longPressTimer?.cancel();
+        _longPressDownPos = event.position;
+        _longPressTimer = Timer(const Duration(milliseconds: 500), () {
+          if (!mounted || _longPressDownPos == null) return;
+          _translateTimer?.cancel();
+          _handleLongPress(_longPressDownPos!);
+        });
+      },
+      onPointerUp: (_) {
+        _longPressTimer?.cancel();
+        _longPressDownPos = null;
+      },
+      onPointerCancel: (_) {
+        _longPressTimer?.cancel();
+        _longPressDownPos = null;
+      },
+      onPointerMove: (event) {
+        if (_longPressDownPos != null) {
+          final delta = event.position - _longPressDownPos!;
+          if (delta.distance > 18) {
+            _longPressTimer?.cancel();
+            _longPressDownPos = null;
+          }
+        }
       },
       child: TextField(
           controller: _ctrl,
