@@ -535,6 +535,45 @@ List<_MdxDef> _parsePlainDefs(String text) {
   return [_MdxDef(text: cleaned)];
 }
 
+// ── 21世纪大英汉词典 parser ────────────────────────────────────────────────────
+// Structure:
+//   ul > li.wordGroup (POS group)
+//     span.pos.wordGroup  → part of speech
+//     ul.ol.wordGroup > li.wordGroup  (each definition)
+//       span.def          → Chinese definition
+//       p.additional_en   → English example
+//       p.additional      → Chinese translation of example
+
+List<_MdxDef> _parseC21Html(dom.Document doc) {
+  final results = <_MdxDef>[];
+
+  for (final defLi in doc.querySelectorAll('.ol > li').toList()) {
+    // Chinese definition text
+    final defEl = defLi.querySelector('.def');
+    if (defEl == null) continue;
+    final text = defEl.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.length < 2) continue;
+
+    // POS: go up to ul.ol → li.wordGroup (POS group) → span.pos
+    final posGroupLi = defLi.parent?.parent;
+    final posEl = posGroupLi?.querySelector('.pos');
+    final pos = posEl?.text.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
+
+    // Examples: .additional_en + immediately following .additional
+    final examples = <_MdxExample>[];
+    for (final enEl in defLi.querySelectorAll('.additional_en').toList()) {
+      if (examples.length >= 3) break;
+      final enTxt = enEl.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (enTxt.length <= 4) continue;
+      final cnTxt = _nextSiblingCn(enEl, '.additional');
+      examples.add(_MdxExample(en: enTxt, cn: cnTxt));
+    }
+
+    results.add(_MdxDef(pos: pos, text: text, examples: List.unmodifiable(examples)));
+  }
+  return results;
+}
+
 List<_MdxDef> _parseMdxHtml(String htmlStr) {
   // Multiple MDX entries are separated by \x00 — parse each independently
   // so each entry's docPos is scoped to its own HTML fragment.
@@ -543,6 +582,11 @@ List<_MdxDef> _parseMdxHtml(String htmlStr) {
   }
   try {
     final doc = html_parser.parse(htmlStr);
+
+    // 21世纪大英汉词典: detected by .additional_en class (unique to this dict)
+    if (doc.querySelector('.additional_en') != null) {
+      return _parseC21Html(doc);
+    }
 
     // Try sense block selectors in priority order
     List<dom.Element> senses = doc.querySelectorAll('li.Sense').toList();
