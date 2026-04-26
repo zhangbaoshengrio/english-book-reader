@@ -76,11 +76,20 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
     if (_aiFetching) return;
     if (_aiResult != null && !reset) return;
     setState(() { _aiFetching = true; if (reset) _aiResult = null; });
-    final result = await AiService.lookupWord(
-        widget.word, widget.sentence);
-    if (mounted) {
+
+    String accumulated = '';
+    await for (final chunk in AiService.lookupWordStream(
+        widget.word, widget.sentence)) {
+      if (!mounted) return;
+      accumulated += chunk;
+      // On first chunk: hide spinner and show partial text
+      setState(() { _aiFetching = false; _aiResult = accumulated; });
+    }
+
+    if (!mounted) return;
+    if (accumulated.isEmpty) {
       setState(() {
-        _aiResult = result.isEmpty ? '查询失败，请检查 API Key 或网络连接。' : result;
+        _aiResult = '查询失败，请检查 API Key 或网络连接。';
         _aiFetching = false;
       });
     }

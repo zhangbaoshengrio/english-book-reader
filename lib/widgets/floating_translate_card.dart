@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import '../services/ai_service.dart';
 import '../services/translation_service.dart';
 import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
@@ -15,14 +16,14 @@ class FloatingTranslateCard extends StatefulWidget {
   final String originalText;
   final VoidCallback onDismiss;
   final void Function(String action, String text)? onToolbarAction;
-  /// Called when user stars a result. Receives (phrase, translation).
-  final void Function(String phrase, String translation)? onStar;
-  /// Called when user unstars the phrase.
-  final VoidCallback? onUnstar;
-  /// Called when user taps the edit button (phrase already starred).
-  final VoidCallback? onEdit;
-  /// Whether the phrase is already starred.
-  final bool isStarred;
+  /// Called when user stars an engine result. Receives (phrase, translation, engineId).
+  final void Function(String phrase, String translation, String engineId)? onStar;
+  /// Called when user unstars an engine result. Receives engineId.
+  final void Function(String engineId)? onUnstar;
+  /// Called when user taps edit on a starred result. Receives (engineId, translation).
+  final void Function(String engineId, String translation)? onEdit;
+  /// Which engine results are already starred.
+  final Set<String> starredEngineIds;
   /// Whether auto-speak is enabled.
   final bool autoSpeak;
 
@@ -34,7 +35,7 @@ class FloatingTranslateCard extends StatefulWidget {
     this.onStar,
     this.onUnstar,
     this.onEdit,
-    this.isStarred = false,
+    this.starredEngineIds = const {},
     this.autoSpeak = false,
   });
 
@@ -66,8 +67,24 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
   }
 
   Future<void> _fetchEngine(String engineId) async {
-    final result = await TranslationService.translate(widget.originalText, engineId);
-    if (mounted) setState(() => _results[engineId] = result);
+    if (engineId.startsWith('ai_')) {
+      // AI engine: stream response incrementally
+      final aiId = engineId.substring(3);
+      String accumulated = '';
+      await for (final chunk in AiService.queryStream(
+          aiId, AiPrompts.sentenceAnalysis(widget.originalText))) {
+        if (!mounted) return;
+        accumulated += chunk;
+        setState(() => _results[engineId] = accumulated);
+      }
+      if (mounted && accumulated.isEmpty) {
+        setState(() => _results[engineId] = '');
+      }
+    } else {
+      final result =
+          await TranslationService.translate(widget.originalText, engineId);
+      if (mounted) setState(() => _results[engineId] = result);
+    }
   }
 
   Future<void> _speak() async {
@@ -103,9 +120,7 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
               _Header(
                 autoSpeak: widget.autoSpeak,
                 speaking: _speaking,
-                isStarred: widget.isStarred,
                 onSpeak: _speaking ? null : _speak,
-                onEdit: widget.isStarred ? widget.onEdit : null,
                 onDismiss: widget.onDismiss,
               ),
               // ── Toolbar ───────────────────────────────────────────────────
@@ -149,6 +164,7 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
                       children: _engines.map((engine) {
                         final isAi = engine.type == EngineType.aiEngine;
                         final isLast = engine == _engines.last;
+                        final isStarred = widget.starredEngineIds.contains(engine.id);
                         return isAi
                             ? _AiResultBlock(
                                 engine: engine,
@@ -158,13 +174,18 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
                             : _ResultBlock(
                                 engine: engine,
                                 translation: _results[engine.id],
-                                isStarred: widget.isStarred,
+                                isStarred: isStarred,
                                 isLast: isLast,
                                 onStar: widget.onStar == null ? null : () {
                                   final t = _results[engine.id] ?? '';
-                                  widget.onStar!(widget.originalText, t);
+                                  widget.onStar!(widget.originalText, t, engine.id);
                                 },
-                                onUnstar: widget.onUnstar,
+                                onUnstar: widget.onUnstar == null ? null
+                                    : () => widget.onUnstar!(engine.id),
+                                onEdit: (widget.onEdit == null || !isStarred) ? null : () {
+                                  final t = _results[engine.id] ?? '';
+                                  widget.onEdit!(engine.id, t);
+                                },
                               );
                       }).toList(),
                     ),
@@ -183,17 +204,13 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
 class _Header extends StatelessWidget {
   final bool autoSpeak;
   final bool speaking;
-  final bool isStarred;
   final VoidCallback? onSpeak;
-  final VoidCallback? onEdit;
   final VoidCallback onDismiss;
 
   const _Header({
     required this.autoSpeak,
     required this.speaking,
-    required this.isStarred,
     required this.onSpeak,
-    required this.onEdit,
     required this.onDismiss,
   });
 
@@ -210,24 +227,6 @@ class _Header extends StatelessWidget {
         const Text('翻译',
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
         const Spacer(),
-        // Edit button (when starred)
-        if (isStarred && onEdit != null)
-          GestureDetector(
-            onTap: onEdit,
-            child: Container(
-              margin: const EdgeInsets.only(right: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: AppTheme.primary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Text('编辑',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: AppTheme.primary,
-                      fontWeight: FontWeight.w600)),
-            ),
-          ),
         // Speak button (only when autoSpeak is on)
         if (autoSpeak)
           GestureDetector(
@@ -265,6 +264,7 @@ class _ResultBlock extends StatelessWidget {
   final bool isLast;
   final VoidCallback? onStar;
   final VoidCallback? onUnstar;
+  final VoidCallback? onEdit;
 
   const _ResultBlock({
     required this.engine,
@@ -273,6 +273,7 @@ class _ResultBlock extends StatelessWidget {
     required this.isLast,
     this.onStar,
     this.onUnstar,
+    this.onEdit,
   });
 
   static const _colors = {
@@ -305,7 +306,7 @@ class _ResultBlock extends StatelessWidget {
       ),
       padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Engine label
+        // Engine label + translation text
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -344,18 +345,34 @@ class _ResultBlock extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        // Star button
+        // Star button + edit link below it
         if (onStar != null || onUnstar != null)
-          GestureDetector(
-            onTap: isStarred ? onUnstar : onStar,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Icon(
-                isStarred ? Icons.star_rounded : Icons.star_border_rounded,
-                size: 22,
-                color: isStarred ? const Color(0xFFFFBB00) : AppTheme.textTertiary,
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                onTap: isStarred ? onUnstar : onStar,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(
+                    isStarred ? Icons.star_rounded : Icons.star_border_rounded,
+                    size: 22,
+                    color: isStarred ? const Color(0xFFFFBB00) : AppTheme.textTertiary,
+                  ),
+                ),
               ),
-            ),
+              if (isStarred && onEdit != null) ...[
+                const SizedBox(height: 2),
+                GestureDetector(
+                  onTap: onEdit,
+                  child: const Text('编辑',
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.primary,
+                          fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ],
           ),
       ]),
     );

@@ -318,4 +318,161 @@ class AiService {
     }
     return '';
   }
+
+  // ── OpenAI-compatible streaming ───────────────────────────────────────────
+
+  static Stream<String> _streamOpenAICompatible({
+    required String prompt,
+    required String apiKey,
+    required String model,
+    required String baseUrl,
+  }) async* {
+    final client = http.Client();
+    try {
+      final req = http.Request('POST', Uri.parse(baseUrl));
+      req.headers['Content-Type'] = 'application/json';
+      req.headers['Authorization'] = 'Bearer $apiKey';
+      req.body = jsonEncode({
+        'model': model,
+        'messages': [
+          {'role': 'user', 'content': prompt}
+        ],
+        'max_tokens': 800,
+        'temperature': 0.3,
+        'stream': true,
+      });
+
+      final streamed =
+          await client.send(req).timeout(const Duration(seconds: 30));
+      if (streamed.statusCode != 200) return;
+
+      await for (final line in streamed.stream
+          .transform(const Utf8Decoder())
+          .transform(const LineSplitter())) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty || !trimmed.startsWith('data: ')) continue;
+        final data = trimmed.substring(6);
+        if (data == '[DONE]') break;
+        try {
+          final json = jsonDecode(data) as Map<String, dynamic>;
+          final delta =
+              json['choices']?[0]?['delta']?['content'] as String?;
+          if (delta != null && delta.isNotEmpty) yield delta;
+        } catch (_) {}
+      }
+    } catch (_) {} finally {
+      client.close();
+    }
+  }
+
+  // ── Gemini streaming ──────────────────────────────────────────────────────
+
+  static Stream<String> _streamGemini({
+    required String prompt,
+    required String apiKey,
+    required String model,
+  }) async* {
+    final url =
+        'https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$apiKey';
+    final client = http.Client();
+    try {
+      final req = http.Request('POST', Uri.parse(url));
+      req.headers['Content-Type'] = 'application/json';
+      req.body = jsonEncode({
+        'contents': [
+          {
+            'parts': [
+              {'text': prompt}
+            ]
+          }
+        ],
+        'generationConfig': {
+          'maxOutputTokens': 800,
+          'temperature': 0.3,
+        },
+      });
+
+      final streamed =
+          await client.send(req).timeout(const Duration(seconds: 30));
+      if (streamed.statusCode != 200) return;
+
+      await for (final line in streamed.stream
+          .transform(const Utf8Decoder())
+          .transform(const LineSplitter())) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty || !trimmed.startsWith('data: ')) continue;
+        final data = trimmed.substring(6);
+        if (data == '[DONE]') break;
+        try {
+          final json = jsonDecode(data) as Map<String, dynamic>;
+          final candidates = json['candidates'] as List?;
+          if (candidates != null && candidates.isNotEmpty) {
+            final parts = candidates.first['content']?['parts'] as List?;
+            if (parts != null && parts.isNotEmpty) {
+              final text = parts.first['text'] as String?;
+              if (text != null && text.isNotEmpty) yield text;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {} finally {
+      client.close();
+    }
+  }
+
+  /// Stream incremental AI response chunks. Emits text deltas as they arrive.
+  static Stream<String> queryStream(String engineId, String prompt) async* {
+    if (prompt.trim().isEmpty) return;
+    try {
+      final engines = await getEngines();
+      final engine = engines.firstWhere((e) => e.id == engineId,
+          orElse: () => const AiEngine(id: '', name: ''));
+      if (engine.id.isEmpty || engine.apiKey.isEmpty) return;
+
+      switch (engine.id) {
+        case 'chatgpt':
+          yield* _streamOpenAICompatible(
+            prompt: prompt,
+            apiKey: engine.apiKey,
+            model: engine.model.isNotEmpty ? engine.model : 'gpt-4o-mini',
+            baseUrl: engine.baseUrl.isNotEmpty
+                ? engine.baseUrl
+                : 'https://api.openai.com/v1/chat/completions',
+          );
+          break;
+        case 'gemini':
+          yield* _streamGemini(
+            prompt: prompt,
+            apiKey: engine.apiKey,
+            model: engine.model.isNotEmpty ? engine.model : 'gemini-2.0-flash',
+          );
+          break;
+        case 'deepseek':
+          yield* _streamOpenAICompatible(
+            prompt: prompt,
+            apiKey: engine.apiKey,
+            model: engine.model.isNotEmpty ? engine.model : 'deepseek-chat',
+            baseUrl: 'https://api.deepseek.com/chat/completions',
+          );
+          break;
+        default:
+          if (engine.baseUrl.isNotEmpty) {
+            yield* _streamOpenAICompatible(
+              prompt: prompt,
+              apiKey: engine.apiKey,
+              model: engine.model,
+              baseUrl: engine.baseUrl,
+            );
+          }
+      }
+    } catch (_) {}
+  }
+
+  /// Convenience: streaming word lookup for the first enabled AI engine.
+  static Stream<String> lookupWordStream(
+      String word, String sentence) async* {
+    final engines = await getEnabledEngines();
+    if (engines.isEmpty) return;
+    yield* queryStream(engines.first.id, AiPrompts.wordLookup(word, sentence));
+  }
 }
