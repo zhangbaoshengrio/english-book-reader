@@ -1182,11 +1182,27 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   }
 
   /// Long-press on word: show word lookup card.
-  /// [offset] is the character offset in the text, taken from
-  /// [_ctrl.selection.baseOffset] at pointer-down time (set by TextField's
-  /// own tap-detection, which is more accurate than manual coordinate math).
+  /// Only fires when the offset is inside a highlighted multi-word phrase/sentence.
   void _handleLongPress(int offset) {
     if (offset < 0) return;
+
+    // Guard: long-press lookup only works inside highlighted phrases/sentences.
+    // Single-word vocab entries and plain text use single-tap for lookup.
+    final lower = widget.text.toLowerCase();
+    bool insidePhrase = false;
+    for (final entry in widget.vocabSet) {
+      if (!entry.contains(' ')) continue; // single-word entries: no long-press
+      var from = 0;
+      while (true) {
+        final idx = lower.indexOf(entry, from);
+        if (idx < 0) break;
+        final end = idx + entry.length;
+        if (offset >= idx && offset < end) { insidePhrase = true; break; }
+        from = end;
+      }
+      if (insidePhrase) break;
+    }
+    if (!insidePhrase) return;
 
     // Find which word range contains this offset.
     for (final (start, end) in _wordRanges) {
