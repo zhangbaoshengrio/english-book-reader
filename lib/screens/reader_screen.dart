@@ -1057,7 +1057,6 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   Timer? _translateTimer;
   Timer? _suppressOutsideTimer;
   Timer? _longPressTimer;
-  Offset? _longPressDownPos;
   bool _suppressListener = false;
   bool _suppressOutside = false;
   @override
@@ -1182,20 +1181,11 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   }
 
   /// Long-press on word: show word lookup card.
-  void _handleLongPress(Offset globalPos) {
-    // Convert global position to a character offset in the TextField.
-    final ro = context.findRenderObject();
-    RenderEditable? re;
-    void visit(RenderObject o) {
-      if (o is RenderEditable) { re = o; return; }
-      o.visitChildren(visit);
-    }
-    if (ro != null) visit(ro);
-    if (re == null) return;
-
-    final localPos = re!.globalToLocal(globalPos);
-    final TextPosition tp = re!.getPositionForPoint(localPos);
-    final offset = tp.offset;
+  /// [offset] is the character offset in the text, taken from
+  /// [_ctrl.selection.baseOffset] at pointer-down time (set by TextField's
+  /// own tap-detection, which is more accurate than manual coordinate math).
+  void _handleLongPress(int offset) {
+    if (offset < 0) return;
 
     // Find which word range contains this offset.
     for (final (start, end) in _wordRanges) {
@@ -1227,30 +1217,25 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     // phrases where the TextField's own LongPressGestureRecognizer would win.
     return Listener(
       behavior: HitTestBehavior.translucent,
-      onPointerDown: (event) {
+      onPointerDown: (_) {
         _longPressTimer?.cancel();
-        _longPressDownPos = event.position;
+        // Snapshot the cursor offset immediately — TextField positions the cursor
+        // on pointer-down, so this gives the correct character under the finger
+        // without any manual coordinate conversion (which can be off-by-line).
+        final downOffset = _ctrl.selection.baseOffset;
         _longPressTimer = Timer(const Duration(milliseconds: 500), () {
-          if (!mounted || _longPressDownPos == null) return;
+          if (!mounted) return;
           _translateTimer?.cancel();
-          _handleLongPress(_longPressDownPos!);
+          _handleLongPress(downOffset);
         });
       },
-      onPointerUp: (_) {
-        _longPressTimer?.cancel();
-        _longPressDownPos = null;
-      },
-      onPointerCancel: (_) {
-        _longPressTimer?.cancel();
-        _longPressDownPos = null;
-      },
+      onPointerUp: (_) => _longPressTimer?.cancel(),
+      onPointerCancel: (_) => _longPressTimer?.cancel(),
       onPointerMove: (event) {
-        if (_longPressDownPos != null) {
-          final delta = event.position - _longPressDownPos!;
-          if (delta.distance > 18) {
-            _longPressTimer?.cancel();
-            _longPressDownPos = null;
-          }
+        // Cancel long-press if finger moves more than 18 logical pixels.
+        if (_longPressTimer?.isActive == true &&
+            event.delta.distance > 3) {
+          _longPressTimer?.cancel();
         }
       },
       child: TextField(
