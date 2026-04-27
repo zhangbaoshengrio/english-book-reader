@@ -7,9 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 // ── Engine type constants ──────────────────────────────────────────────────────
 
 class VoiceEngineType {
-  static const builtinTts = 'builtinTts'; // system flutter_tts
-  static const openaiApi  = 'openaiApi';  // OpenAI TTS API
-  static const customUrl  = 'customUrl';  // custom HTTP endpoint returning audio
+  static const builtinTts   = 'builtinTts';   // system flutter_tts
+  static const openaiApi    = 'openaiApi';    // OpenAI TTS API
+  static const microsoftTts = 'microsoftTts'; // Azure Cognitive Services TTS
+  static const customUrl    = 'customUrl';    // custom HTTP endpoint returning audio
+  static const elevenLabsTts  = 'elevenLabsTts';  // ElevenLabs TTS API
+  static const volcengineTts  = 'volcengineTts';  // 火山引擎 TTS API
 }
 
 // ── Credential field descriptor ───────────────────────────────────────────────
@@ -124,6 +127,30 @@ class VoiceEngine {
       voiceParam: 'alloy',
       speed:      1.0,
     ),
+    VoiceEngine(
+      id:         'microsoft_tts',
+      name:       '微软 Azure 语音',
+      type:       VoiceEngineType.microsoftTts,
+      enabled:    false,
+      voiceParam: 'en-US-JennyNeural',
+      speed:      1.0,
+    ),
+    VoiceEngine(
+      id:         'elevenlabs_tts',
+      name:       'ElevenLabs 语音',
+      type:       VoiceEngineType.elevenLabsTts,
+      enabled:    false,
+      voiceParam: '21m00Tcm4TlvDq8ikWAM', // Rachel
+      speed:      1.0,
+    ),
+    VoiceEngine(
+      id:         'volcengine_tts',
+      name:       '豆包语音',
+      type:       VoiceEngineType.volcengineTts,
+      enabled:    false,
+      voiceParam: '',
+      speed:      1.0,
+    ),
   ];
 
   // ── Credential field definitions ──────────────────────────────────────────
@@ -134,7 +161,50 @@ class VoiceEngine {
       VoiceCredentialField(key: 'model',   label: '模型',    hint: 'tts-1'),
       VoiceCredentialField(key: 'baseUrl', label: '接口',    hint: 'https://api.openai.com/v1/audio/speech'),
     ],
+    'microsoft_tts': [
+      VoiceCredentialField(key: 'apiKey', label: 'API Key',  hint: 'Azure 订阅密钥'),
+      VoiceCredentialField(key: 'region', label: 'Region',   hint: 'eastus / southeastasia 等'),
+    ],
+    'elevenlabs_tts': [
+      VoiceCredentialField(key: 'apiKey', label: 'API Key', hint: 'ElevenLabs API Key'),
+    ],
+    'volcengine_tts': [
+      VoiceCredentialField(key: 'appId',      label: 'App ID',      hint: '控制台 AppID（数字）'),
+      VoiceCredentialField(key: 'accessKey',  label: 'Access Key',  hint: '控制台 Access Key'),
+      VoiceCredentialField(key: 'resourceId', label: 'Resource ID', hint: 'seed-icl-2.0'),
+    ],
   };
+
+  // Microsoft Azure TTS common English neural voices
+  static const List<String> microsoftVoices = [
+    'en-US-JennyNeural',
+    'en-US-GuyNeural',
+    'en-US-AriaNeural',
+    'en-US-DavisNeural',
+    'en-US-AmberNeural',
+    'en-US-AnaNeural',
+    'en-US-AshleyNeural',
+    'en-US-BrandonNeural',
+    'en-US-ChristopherNeural',
+    'en-US-CoraNeural',
+    'en-US-ElizabethNeural',
+    'en-US-EricNeural',
+    'en-US-JacobNeural',
+    'en-US-JaneNeural',
+    'en-US-JasonNeural',
+    'en-US-MichelleNeural',
+    'en-US-MonicaNeural',
+    'en-US-NancyNeural',
+    'en-US-RogerNeural',
+    'en-US-RyanMultilingualNeural',
+    'en-US-SaraNeural',
+    'en-US-SteffanNeural',
+    'en-US-TonyNeural',
+    'en-GB-SoniaNeural',
+    'en-GB-RyanNeural',
+    'en-AU-NatashaNeural',
+    'en-AU-WilliamNeural',
+  ];
 
   // OpenAI TTS preset models
   static const List<String> openaiTtsModels = ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts'];
@@ -161,6 +231,48 @@ class VoiceEngine {
     {'name': '宁静',       'instruction': 'Speak in a serene, peaceful tone — gentle, soft, and calming.'},
     {'name': '牛仔',       'instruction': 'Speak like a rugged cowboy — drawling, laid-back, with a frontier spirit.'},
   ];
+
+  // ElevenLabs voices (name → voice_id)
+  static const List<Map<String, String>> elevenLabsVoices = [
+    {'name': 'Rachel',    'id': '21m00Tcm4TlvDq8ikWAM'},
+    {'name': 'Clyde',     'id': '2EiwWnXFnvU5JabPnv8n'},
+    {'name': 'Domi',      'id': 'AZnzlk1XvdvUeBnXmlld'},
+    {'name': 'Dave',      'id': 'CYw3kZ78EXxDvMYHYgAZ'},
+    {'name': 'Fin',       'id': 'D38z5RcWu1voky8WS1ja'},
+    {'name': 'Bella',     'id': 'EXAVITQu4vr4xnSDxMaL'},
+    {'name': 'Antoni',    'id': 'ErXwobaYiN019PkySvjV'},
+    {'name': 'Charlie',   'id': 'IKne3meq5aSn9XLyUdCD'},
+    {'name': 'George',    'id': 'JBFqnCBsd6RMkjVDRZzb'},
+    {'name': 'Emily',     'id': 'LcfcDJNUP1GQjkzn1xUU'},
+    {'name': 'Elli',      'id': 'MF3mGyEYCl7XYWbV9V6O'},
+    {'name': 'Callum',    'id': 'N2lVS1w4EtoT3dr4eOWO'},
+    {'name': 'Harry',     'id': 'SOYHLrjzK2X1ezoPC6cr'},
+    {'name': 'Liam',      'id': 'TX3LPaxmHKxFdv7VOQHJ'},
+    {'name': 'Dorothy',   'id': 'ThT5KcBeYPX3keUQqHPh'},
+    {'name': 'Josh',      'id': 'TxGEqnHWrfWFTfGW9XjX'},
+    {'name': 'Arnold',    'id': 'VR6AewLTigWG4xSOukaG'},
+    {'name': 'Charlotte', 'id': 'XB0fDUnXU5powFXDhCwa'},
+    {'name': 'Matilda',   'id': 'XrExE9yKIg1WjnnlVkGX'},
+    {'name': 'James',     'id': 'ZQe5CZNOzWyzPSCn5a3c'},
+    {'name': 'Freya',     'id': 'jsCqWAovK2LkecY7zXl4'},
+    {'name': 'Gigi',      'id': 'jBpfuIE2acCO8z3wKNLl'},
+    {'name': 'Jeremy',    'id': 'bVMeCyTHy58xNoL34h3p'},
+    {'name': 'Michael',   'id': 'flq6f7yjXakVcjGjq9Vh'},
+    {'name': 'Ethan',     'id': 'g5CIjZEefAph4nQFvHAz'},
+    {'name': 'Nicole',    'id': 'piTKgcLEGmPE4e6mEKli'},
+    {'name': 'Sam',       'id': 'yoZ06aMxZJJ28mfd3POQ'},
+  ];
+
+  static String volcengineVoiceNameFor(String id) {
+    if (id.isEmpty) return '未设置';
+    return id.length > 16 ? '${id.substring(0, 8)}…' : id;
+  }
+
+  static String elevenLabsVoiceNameFor(String id) {
+    final v = elevenLabsVoices.firstWhere(
+        (v) => v['id'] == id, orElse: () => {'name': id, 'id': id});
+    return v['name']!;
+  }
 
   /// Display name for a given instruction string (empty → "默认").
   static String styleNameFor(String instruction) {
@@ -336,6 +448,12 @@ class VoiceEngineService {
         return null; // caller handles via flutter_tts
       case VoiceEngineType.openaiApi:
         return _openaiTts(text, engine);
+      case VoiceEngineType.microsoftTts:
+        return _microsoftTts(text, engine);
+      case VoiceEngineType.elevenLabsTts:
+        return _elevenLabsTts(text, engine);
+      case VoiceEngineType.volcengineTts:
+        return _volcengineTts(text, engine);
       case VoiceEngineType.customUrl:
         return _customTts(text, engine);
       default:
@@ -382,6 +500,129 @@ class VoiceEngineService {
       ).timeout(const Duration(seconds: 20));
       if (resp.statusCode == 200) return resp.bodyBytes;
     } catch (_) {}
+    return null;
+  }
+
+  // ── Microsoft Azure TTS ───────────────────────────────────────────────────
+
+  static Future<List<int>?> _microsoftTts(String text, VoiceEngine engine) async {
+    final apiKey = engine.credentials['apiKey'] ?? '';
+    final region = engine.credentials['region'] ?? '';
+    if (apiKey.isEmpty || region.isEmpty) return null;
+    final voice = engine.voiceParam.isNotEmpty ? engine.voiceParam : 'en-US-JennyNeural';
+    // Speed: Azure uses <prosody rate> where 1.0 = normal, expressed as percentage
+    final rate = engine.speed == 1.0 ? 'default' : '${((engine.speed - 1.0) * 100).toStringAsFixed(0)}%';
+    final ssml = '''<speak version='1.0' xml:lang='en-US'>
+  <voice name='$voice'>
+    <prosody rate='$rate'>
+      ${text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}
+    </prosody>
+  </voice>
+</speak>''';
+    try {
+      final resp = await http.post(
+        Uri.parse('https://$region.tts.speech.microsoft.com/cognitiveservices/v1'),
+        headers: {
+          'Ocp-Apim-Subscription-Key': apiKey,
+          'Content-Type': 'application/ssml+xml',
+          'X-Microsoft-OutputFormat': 'audio-48khz-192kbitrate-mono-mp3',
+          'User-Agent': 'EnglishReader',
+        },
+        body: ssml,
+      ).timeout(const Duration(seconds: 20));
+      if (resp.statusCode == 200) return resp.bodyBytes;
+    } catch (_) {}
+    return null;
+  }
+
+  // ── ElevenLabs TTS ───────────────────────────────────────────────────────
+
+  static Future<List<int>?> _elevenLabsTts(String text, VoiceEngine engine) async {
+    final apiKey = engine.credentials['apiKey'] ?? '';
+    if (apiKey.isEmpty) return null;
+    final voiceId = engine.voiceParam.isNotEmpty
+        ? engine.voiceParam
+        : '21m00Tcm4TlvDq8ikWAM';
+    try {
+      final resp = await http.post(
+        Uri.parse('https://api.elevenlabs.io/v1/text-to-speech/$voiceId'),
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json',
+          'Accept': 'audio/mpeg',
+        },
+        body: jsonEncode({
+          'text': text,
+          'model_id': 'eleven_monolingual_v1',
+          'voice_settings': {'stability': 0.5, 'similarity_boost': 0.75},
+        }),
+      ).timeout(const Duration(seconds: 20));
+      if (resp.statusCode == 200) return resp.bodyBytes;
+    } catch (_) {}
+    return null;
+  }
+
+  // ── 豆包语音 TTS (V3 HTTP) ────────────────────────────────────────────────
+
+  static Future<List<int>?> _volcengineTts(String text, VoiceEngine engine) async {
+    final appId     = engine.credentials['appId']     ?? '';
+    final accessKey = engine.credentials['accessKey'] ?? '';
+    final speaker   = engine.voiceParam;
+    if (appId.isEmpty || accessKey.isEmpty || speaker.isEmpty) return null;
+    final resourceId = engine.credentials['resourceId']?.isNotEmpty == true
+        ? engine.credentials['resourceId']!
+        : 'seed-icl-2.0';
+    try {
+      final resp = await http.post(
+        Uri.parse('https://openspeech.bytedance.com/api/v3/tts/unidirectional'),
+        headers: {
+          'X-Api-App-Id':    appId,
+          'X-Api-Access-Key': accessKey,
+          'X-Api-Resource-Id': resourceId,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'user': {'uid': 'english_reader'},
+          'req_params': {
+            'text': text,
+            'speaker': speaker,
+            'audio_params': {
+              'format': 'mp3',
+              'sample_rate': 24000,
+            },
+          },
+        }),
+      ).timeout(const Duration(seconds: 20));
+      if (resp.statusCode == 200) {
+        // Response is NDJSON: each line is {"code":0,"data":"base64mp3..."}
+        // Final line has code 20000000 (end of stream)
+        final audio = <int>[];
+        for (final line in resp.body.split('\n')) {
+          final trimmed = line.trim();
+          if (trimmed.isEmpty) continue;
+          try {
+            final chunk = jsonDecode(trimmed) as Map<String, dynamic>;
+            final code = chunk['code'] as int? ?? -1;
+            if (code == 20000000) break; // end of stream
+            if (code == 0) {
+              final b64 = chunk['data'] as String?;
+              if (b64 != null && b64.isNotEmpty) audio.addAll(base64Decode(b64));
+            } else {
+              final msg = chunk['message'] ?? chunk['msg'] ?? '合成失败';
+              throw Exception('code=$code $msg');
+            }
+          } catch (e) {
+            if (e is Exception) rethrow;
+          }
+        }
+        if (audio.isNotEmpty) return audio;
+      } else {
+        final body = resp.body.length > 200 ? resp.body.substring(0, 200) : resp.body;
+        throw Exception('HTTP ${resp.statusCode}: $body');
+      }
+    } catch (e) {
+      if (e is Exception) rethrow;
+    }
     return null;
   }
 

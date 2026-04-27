@@ -9,6 +9,32 @@ class TtsService {
   static bool _ready = false;
   static double _speed = 0.75;
 
+  // ── Audio cache (in-memory, cleared when engine config changes) ──────────
+  static final Map<String, List<int>> _audioCache = {};
+  static const _maxCacheEntries = 120;
+
+  static String _cacheKey(String text, VoiceEngine engine) =>
+      '${engine.id}|${engine.voiceParam}|${engine.speed}|$text';
+
+  static Future<List<int>?> _fetchWithCache(String text, VoiceEngine engine) async {
+    final key = _cacheKey(text, engine);
+    final cached = _audioCache[key];
+    if (cached != null) return cached;
+    final bytes = await VoiceEngineService.fetchAudio(text, engine);
+    if (bytes != null && bytes.isNotEmpty) {
+      if (_audioCache.length >= _maxCacheEntries) {
+        // Drop the oldest half when full
+        final keys = _audioCache.keys.take(_maxCacheEntries ~/ 2).toList();
+        for (final k in keys) _audioCache.remove(k);
+      }
+      _audioCache[key] = bytes;
+    }
+    return bytes;
+  }
+
+  /// Clear cached audio (call after changing engine credentials / voice).
+  static void clearCache() => _audioCache.clear();
+
   static Future<void> _init() async {
     if (_ready) return;
     await _tts.setLanguage('en-US');
@@ -32,7 +58,7 @@ class TtsService {
         _speed = engine.speed;
         _ready = false;
       } else {
-        final bytes = await VoiceEngineService.fetchAudio(text, engine);
+        final bytes = await _fetchWithCache(text, engine);
         if (bytes != null && bytes.isNotEmpty) {
           await _playBytes(bytes);
           return;
@@ -60,6 +86,8 @@ class TtsService {
       await _tts.stop();
       await _player.stop();
       await _player.play(DeviceFileSource(path));
+      // Wait for playback to complete
+      await _player.onPlayerComplete.first;
     } catch (_) {
       // ignore playback errors
     } finally {
@@ -81,7 +109,7 @@ class TtsService {
         _speed = engine.speed;
         _ready = false;
       } else {
-        final bytes = await VoiceEngineService.fetchAudio(text, engine);
+        final bytes = await _fetchWithCache(text, engine);
         if (bytes != null && bytes.isNotEmpty) {
           await _playBytes(bytes);
           return;

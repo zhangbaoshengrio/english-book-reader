@@ -128,6 +128,7 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
                 controllers['baseUrl']?.text = defaultUrl;
               }
               final nav = Navigator.of(ctx);
+              TtsService.clearCache();
               await VoiceEngineService.saveCredentials(engine.id, creds);
               // Save voice selection
               final engines = await VoiceEngineService.getEngines();
@@ -154,6 +155,51 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
         engine: engine,
         onSave: (voice) async {
           await VoiceEngineService.saveEngineVoiceStyle(engine.id, voice: voice);
+          await _load();
+        },
+      ),
+    );
+  }
+
+  void _showMicrosoftVoicePicker(VoiceEngine engine) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _MicrosoftVoicePickerSheet(
+        engine: engine,
+        onSave: (voice) async {
+          await VoiceEngineService.saveEngineVoiceStyle(engine.id, voice: voice);
+          await _load();
+        },
+      ),
+    );
+  }
+
+  void _showVolcengineVoicePicker(VoiceEngine engine) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _VolcengineVoicePickerSheet(
+        engine: engine,
+        onSave: (voiceId) async {
+          await VoiceEngineService.saveEngineVoiceStyle(engine.id, voice: voiceId);
+          await _load();
+        },
+      ),
+    );
+  }
+
+  void _showElevenLabsVoicePicker(VoiceEngine engine) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ElevenLabsVoicePickerSheet(
+        engine: engine,
+        onSave: (voiceId) async {
+          await VoiceEngineService.saveEngineVoiceStyle(engine.id, voice: voiceId);
           await _load();
         },
       ),
@@ -350,8 +396,13 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
                       final engine = _engines[index];
                       final isCustom = engine.type == VoiceEngineType.customUrl;
                       final isApiEngine = engine.type == VoiceEngineType.openaiApi;
+                      final isMicrosoft = engine.id == 'microsoft_tts';
+                      final isElevenLabs = engine.id == 'elevenlabs_tts';
+                      final isVolcengine = engine.id == 'volcengine_tts';
                       final hasSpeed = engine.type == VoiceEngineType.builtinTts ||
-                          engine.type == VoiceEngineType.openaiApi;
+                          engine.type == VoiceEngineType.openaiApi ||
+                          engine.type == VoiceEngineType.microsoftTts ||
+                          engine.type == VoiceEngineType.volcengineTts;
                       return _EngineRow(
                         engine: engine,
                         isActive: engine.id == _activeId,
@@ -369,9 +420,24 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
                             : null,
                         onVoicePicker: engine.id == 'openai_tts'
                             ? () => _showVoicePicker(engine)
-                            : null,
+                            : isMicrosoft
+                                ? () => _showMicrosoftVoicePicker(engine)
+                                : isElevenLabs
+                                    ? () => _showElevenLabsVoicePicker(engine)
+                                    : isVolcengine
+                                        ? () => _showVolcengineVoicePicker(engine)
+                                        : null,
                         onStylePicker: engine.id == 'openai_tts'
                             ? () => _showStylePicker(engine)
+                            : null,
+                        onMicrosoftConfig: isMicrosoft
+                            ? () => _showCredentialSheet(engine)
+                            : null,
+                        onElevenLabsConfig: isElevenLabs
+                            ? () => _showCredentialSheet(engine)
+                            : null,
+                        onVolcengineConfig: isVolcengine
+                            ? () => _showCredentialSheet(engine)
                             : null,
                         onEdit: isCustom ? () => _showAddSheet(editing: engine) : null,
                         onDelete: isCustom ? () => _deleteEngine(engine) : null,
@@ -398,6 +464,9 @@ class _EngineRow extends StatefulWidget {
   final void Function(double) onSpeedChangeEnd;
   final VoidCallback? onConfigure;
   final VoidCallback? onOpenAiConfig;
+  final VoidCallback? onMicrosoftConfig;
+  final VoidCallback? onElevenLabsConfig;
+  final VoidCallback? onVolcengineConfig;
   final VoidCallback? onVoicePicker;
   final VoidCallback? onStylePicker;
   final VoidCallback? onEdit;
@@ -414,6 +483,9 @@ class _EngineRow extends StatefulWidget {
     required this.onSpeedChangeEnd,
     this.onConfigure,
     this.onOpenAiConfig,
+    this.onMicrosoftConfig,
+    this.onElevenLabsConfig,
+    this.onVolcengineConfig,
     this.onVoicePicker,
     this.onStylePicker,
     this.onEdit,
@@ -454,6 +526,9 @@ class _EngineRowState extends State<_EngineRow> {
     final engine = widget.engine;
     final isBuiltin = engine.type == VoiceEngineType.builtinTts;
     final isOpenAi = engine.id == 'openai_tts';
+    final isMicrosoft = engine.id == 'microsoft_tts';
+    final isElevenLabs = engine.id == 'elevenlabs_tts';
+    final isVolcengine = engine.id == 'volcengine_tts';
     final speedMin = isBuiltin ? 0.3 : 0.25;
     final speedMax = isBuiltin ? 1.5 : 4.0;
     final speedDivisions = isBuiltin ? 12 : 31;
@@ -504,8 +579,8 @@ class _EngineRowState extends State<_EngineRow> {
                   ),
                 ),
               ),
-              // 试听 button (OpenAI TTS only)
-              if (isOpenAi)
+              // 试听 button (OpenAI / Microsoft / ElevenLabs / 火山引擎 TTS)
+              if (isOpenAi || isMicrosoft || isElevenLabs || isVolcengine)
                 GestureDetector(
                   onTap: _preview,
                   child: Padding(
@@ -571,6 +646,78 @@ class _EngineRowState extends State<_EngineRow> {
                 onTap: widget.onStylePicker ?? () {},
               ),
             ],
+            // ── Microsoft TTS sub-rows ────────────────────────────────
+            if (isMicrosoft) ...[
+              const Divider(height: 1, indent: 60),
+              _SubRow(
+                icon: Icons.settings_rounded,
+                label: '配置',
+                value: (engine.credentials['apiKey'] ?? '').isNotEmpty
+                    ? '已配置'
+                    : '未配置',
+                valueColor: (engine.credentials['apiKey'] ?? '').isNotEmpty
+                    ? Colors.green.shade600
+                    : AppTheme.textTertiary,
+                onTap: widget.onMicrosoftConfig ?? () {},
+              ),
+              const Divider(height: 1, indent: 60),
+              _SubRow(
+                icon: Icons.record_voice_over_rounded,
+                label: '声音',
+                value: engine.voiceParam.isNotEmpty ? engine.voiceParam : 'en-US-JennyNeural',
+                onTap: widget.onVoicePicker ?? () {},
+              ),
+            ],
+            // ── ElevenLabs sub-rows ───────────────────────────────────
+            if (isElevenLabs) ...[
+              const Divider(height: 1, indent: 60),
+              _SubRow(
+                icon: Icons.settings_rounded,
+                label: '配置',
+                value: (engine.credentials['apiKey'] ?? '').isNotEmpty
+                    ? '已配置'
+                    : '未配置',
+                valueColor: (engine.credentials['apiKey'] ?? '').isNotEmpty
+                    ? Colors.green.shade600
+                    : AppTheme.textTertiary,
+                onTap: widget.onElevenLabsConfig ?? () {},
+              ),
+              const Divider(height: 1, indent: 60),
+              _SubRow(
+                icon: Icons.record_voice_over_rounded,
+                label: '声音',
+                value: VoiceEngine.elevenLabsVoiceNameFor(
+                    engine.voiceParam.isNotEmpty ? engine.voiceParam : '21m00Tcm4TlvDq8ikWAM'),
+                onTap: widget.onVoicePicker ?? () {},
+              ),
+            ],
+            // ── 火山引擎 sub-rows ──────────────────────────────────────
+            if (isVolcengine) ...[
+              const Divider(height: 1, indent: 60),
+              _SubRow(
+                icon: Icons.settings_rounded,
+                label: '配置',
+                value: (engine.credentials['appId'] ?? '').isNotEmpty &&
+                        (engine.credentials['accessKey'] ?? '').isNotEmpty
+                    ? '已配置'
+                    : '未配置',
+                valueColor: (engine.credentials['appId'] ?? '').isNotEmpty &&
+                        (engine.credentials['accessKey'] ?? '').isNotEmpty
+                    ? Colors.green.shade600
+                    : AppTheme.textTertiary,
+                onTap: widget.onVolcengineConfig ?? () {},
+              ),
+              const Divider(height: 1, indent: 60),
+              _SubRow(
+                icon: Icons.record_voice_over_rounded,
+                label: '音色 ID',
+                value: engine.voiceParam.isNotEmpty ? engine.voiceParam : '未设置',
+                valueColor: engine.voiceParam.isNotEmpty
+                    ? null
+                    : AppTheme.textTertiary,
+                onTap: widget.onVoicePicker ?? () {},
+              ),
+            ],
             // ── Speed slider ──────────────────────────────────────────
             if (widget.showSpeedSlider) ...[
               const Divider(height: 1, indent: 60, endIndent: 0),
@@ -631,6 +778,7 @@ class _EngineRowState extends State<_EngineRow> {
           style: TextStyle(fontSize: 11, color: AppTheme.textTertiary));
     }
     if (engine.id == 'openai_tts') return const SizedBox.shrink();
+    if (engine.id == 'microsoft_tts') return const SizedBox.shrink();
     if (engine.type == VoiceEngineType.openaiApi) {
       final hasKey = (engine.credentials['apiKey'] ?? '').isNotEmpty;
       if (hasKey) {
@@ -1037,9 +1185,12 @@ class _TypeTag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (type) {
-      VoiceEngineType.builtinTts => ('内置', const Color(0xFF34A853)),
-      VoiceEngineType.openaiApi  => ('API',  const Color(0xFFFF9800)),
-      _                          => ('自定义', AppTheme.primary),
+      VoiceEngineType.builtinTts   => ('内置', const Color(0xFF34A853)),
+      VoiceEngineType.openaiApi    => ('API',  const Color(0xFFFF9800)),
+      VoiceEngineType.microsoftTts => ('API',  const Color(0xFF0078D4)),
+      VoiceEngineType.elevenLabsTts  => ('API', const Color(0xFF7B2D8B)),
+      VoiceEngineType.volcengineTts  => ('API', const Color(0xFF1664FF)),
+      _                              => ('自定义', AppTheme.primary),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -1060,15 +1211,21 @@ class _VoiceBadge extends StatelessWidget {
   const _VoiceBadge({required this.engine});
 
   static const _colors = {
-    'builtin':    Color(0xFF607D8B),
-    'openai_tts': Color(0xFF10A37F),
+    'builtin':         Color(0xFF607D8B),
+    'openai_tts':      Color(0xFF10A37F),
+    'microsoft_tts':   Color(0xFF0078D4),
+    'elevenlabs_tts':  Color(0xFF7B2D8B),
+    'volcengine_tts':  Color(0xFF1664FF),
   };
 
   Color get _color => _colors[engine.id] ?? AppTheme.primary;
   String get _icon => switch (engine.type) {
-    VoiceEngineType.builtinTts => '🔊',
-    VoiceEngineType.openaiApi  => 'G',
-    _                          => engine.name.isNotEmpty ? engine.name[0].toUpperCase() : '?',
+    VoiceEngineType.builtinTts    => '🔊',
+    VoiceEngineType.openaiApi     => 'G',
+    VoiceEngineType.microsoftTts  => 'M',
+    VoiceEngineType.elevenLabsTts  => 'E',
+    VoiceEngineType.volcengineTts  => 'V',
+    _                              => engine.name.isNotEmpty ? engine.name[0].toUpperCase() : '?',
   };
   bool get _isEmoji => engine.type == VoiceEngineType.builtinTts;
 
@@ -1118,6 +1275,47 @@ class _CredentialSheetState extends State<_CredentialSheet> {
   bool _syncing = false;
   String? _syncMsg; // null=idle, '✓ ...'=success, '✗ ...'=fail
 
+  bool _testing = false;
+  String? _testMsg;
+
+  late final TextEditingController _speakerCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _speakerCtrl = TextEditingController(text: widget.selectedVoice);
+  }
+
+  @override
+  void dispose() {
+    _speakerCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _testConnection() async {
+    setState(() { _testing = true; _testMsg = null; });
+    try {
+      final creds = {
+        for (final f in widget.fields)
+          f.key: widget.controllers[f.key]?.text.trim() ?? '',
+      };
+      final speaker = widget.engine.type == VoiceEngineType.volcengineTts
+          ? _speakerCtrl.text.trim()
+          : widget.selectedVoice;
+      final tempEngine = widget.engine.copyWith(credentials: creds, voiceParam: speaker);
+      final bytes = await VoiceEngineService.fetchAudio('Hello, connection test.', tempEngine);
+      if (bytes != null && bytes.isNotEmpty) {
+        setState(() { _testing = false; _testMsg = '✓ 连接成功'; });
+        TtsService.playBytes(bytes);
+      } else {
+        setState(() { _testing = false; _testMsg = '✗ 无返回数据'; });
+      }
+    } catch (e) {
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      setState(() { _testing = false; _testMsg = '✗ $msg'; });
+    }
+  }
+
   Future<void> _syncFromAi() async {
     setState(() { _syncing = true; _syncMsg = null; });
     try {
@@ -1158,9 +1356,10 @@ class _CredentialSheetState extends State<_CredentialSheet> {
       fillColor: Color(0xFFF8F8F8),
     );
 
-    // Fields to render in the generic loop (skip model + baseUrl — rendered separately)
+    // Fields to render in the generic loop (skip model + baseUrl + volcengine resourceId — rendered separately)
     final loopFields = widget.fields
-        .where((f) => f.key != 'baseUrl' && f.key != 'model')
+        .where((f) => f.key != 'baseUrl' && f.key != 'model' &&
+            !(widget.engine.type == VoiceEngineType.volcengineTts && f.key == 'resourceId'))
         .toList();
     final baseUrlField = widget.fields.where((f) => f.key == 'baseUrl').firstOrNull;
 
@@ -1194,8 +1393,16 @@ class _CredentialSheetState extends State<_CredentialSheet> {
               ),
             ]),
             const SizedBox(height: 6),
-            const Text('在 platform.openai.com 申请 API Key',
-                style: TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
+            Text(
+              widget.engine.id == 'microsoft_tts'
+                  ? '在 portal.azure.com 申请认知服务 API Key'
+                  : widget.engine.id == 'elevenlabs_tts'
+                      ? '在 elevenlabs.io 申请 API Key'
+                      : widget.engine.id == 'volcengine_tts'
+                          ? '在火山方舟控制台获取 API Key，speaker ID 在语音合成页获取'
+                          : '在 platform.openai.com 申请 API Key',
+              style: const TextStyle(fontSize: 12, color: AppTheme.textTertiary),
+            ),
             const SizedBox(height: 20),
 
             for (final field in loopFields) ...[
@@ -1206,6 +1413,65 @@ class _CredentialSheetState extends State<_CredentialSheet> {
                 decoration: dec.copyWith(hintText: field.hint),
                 style: const TextStyle(fontSize: 14),
                 obscureText: field.key.toLowerCase().contains('key'),
+              ),
+              const SizedBox(height: 14),
+            ],
+
+            // Resource ID (volcengine_tts only) — preset chips + free input
+            if (widget.engine.type == VoiceEngineType.volcengineTts) ...[
+              const Text('Resource ID', style: labelStyle),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: ['seed-tts-2.0', 'seed-tts-1.0', 'seed-icl-2.0', 'seed-icl-1.0'].map((id) {
+                  final selected = widget.controllers['resourceId']?.text == id;
+                  return GestureDetector(
+                    onTap: () => setState(() => widget.controllers['resourceId']?.text = id),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? const Color(0xFF1664FF).withValues(alpha: 0.12)
+                            : const Color(0xFFF3F3F3),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: selected ? const Color(0xFF1664FF) : Colors.transparent,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Text(id,
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: selected
+                                  ? const Color(0xFF1664FF)
+                                  : AppTheme.textSecondary)),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: widget.controllers['resourceId'],
+                decoration: dec.copyWith(hintText: '控制台→模型广场→语音合成→接入点ID，如 seed-tts-2.0'),
+                style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 14),
+            ],
+
+            // Speaker ID (volcengine_tts only)
+            if (widget.engine.type == VoiceEngineType.volcengineTts) ...[
+              const Text('音色 / Speaker ID', style: labelStyle),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _speakerCtrl,
+                decoration: dec.copyWith(
+                  hintText: 'efbcb54c-a3c4-…（在火山方舟控制台 → 语音合成页面获取）',
+                ),
+                style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                onChanged: (v) => widget.onVoiceChanged(v),
               ),
               const SizedBox(height: 14),
             ],
@@ -1331,6 +1597,42 @@ class _CredentialSheetState extends State<_CredentialSheet> {
                   ),
               ]),
               const SizedBox(height: 14),
+            ],
+
+            // Test connection button (all API engines)
+            if (widget.engine.type != VoiceEngineType.builtinTts) ...[
+              Row(children: [
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.blue.shade700,
+                    side: BorderSide(color: Colors.blue.shade300),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: _testing ? null : _testConnection,
+                  icon: _testing
+                      ? SizedBox(
+                          width: 14, height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 1.5, color: Colors.blue.shade700))
+                      : const Icon(Icons.wifi_tethering_rounded, size: 16),
+                  label: Text(_testing ? '测试中…' : '测试连接',
+                      style: const TextStyle(fontSize: 13)),
+                ),
+              ]),
+              if (_testMsg != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  _testMsg!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _testMsg!.startsWith('✓')
+                        ? Colors.green.shade600
+                        : Colors.red.shade600,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
             ],
 
             const SizedBox(height: 6),
@@ -1464,6 +1766,450 @@ class _AddEngineSheet extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ── Volcengine Voice Picker Sheet ─────────────────────────────────────────────
+
+class _VolcengineVoicePickerSheet extends StatefulWidget {
+  final VoiceEngine engine;
+  final void Function(String voiceId) onSave;
+
+  const _VolcengineVoicePickerSheet({required this.engine, required this.onSave});
+
+  @override
+  State<_VolcengineVoicePickerSheet> createState() => _VolcengineVoicePickerSheetState();
+}
+
+class _VolcengineVoicePickerSheetState extends State<_VolcengineVoicePickerSheet> {
+  late TextEditingController _ctrl;
+  bool _previewing = false;
+
+  static const _previewText = 'Hello, how are you today?';
+  static const _accent = Color(0xFF1664FF);
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.engine.voiceParam);
+  }
+
+  @override
+  void dispose() {
+    if (_previewing) TtsService.stop();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _preview() async {
+    final id = _ctrl.text.trim();
+    if (id.isEmpty) return;
+    if (_previewing) {
+      await TtsService.stop();
+      if (mounted) setState(() => _previewing = false);
+      return;
+    }
+    setState(() => _previewing = true);
+    final temp = widget.engine.copyWith(voiceParam: id);
+    final bytes = await VoiceEngineService.fetchAudio(_previewText, temp);
+    if (bytes != null && mounted) await TtsService.playBytes(bytes);
+    if (mounted) setState(() => _previewing = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 36),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                    color: const Color(0xFFDDDDDD),
+                    borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            Row(children: [
+              const Text('配置音色 ID',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const Icon(Icons.close_rounded, color: AppTheme.textTertiary),
+              ),
+            ]),
+            const SizedBox(height: 6),
+            const Text('从火山方舟控制台 → 语音合成页面获取 Speaker ID 并粘贴',
+                style: TextStyle(fontSize: 12, color: AppTheme.textTertiary)),
+            const SizedBox(height: 16),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _ctrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+                    enabledBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: Color(0xFFDDDDDD))),
+                    focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(color: _accent)),
+                    hintText: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+                    hintStyle: TextStyle(fontSize: 12, color: AppTheme.textTertiary),
+                    filled: true,
+                    fillColor: Color(0xFFF8F8F8),
+                  ),
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _preview,
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F5FF),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: _previewing
+                      ? const SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: _accent))
+                      : const Icon(Icons.play_circle_outline_rounded,
+                          size: 22, color: _accent),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _accent,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  final id = _ctrl.text.trim();
+                  if (id.isNotEmpty) widget.onSave(id);
+                  Navigator.pop(context);
+                },
+                child: const Text('确认',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── ElevenLabs Voice Picker Sheet ─────────────────────────────────────────────
+
+class _ElevenLabsVoicePickerSheet extends StatefulWidget {
+  final VoiceEngine engine;
+  final void Function(String voiceId) onSave;
+
+  const _ElevenLabsVoicePickerSheet({required this.engine, required this.onSave});
+
+  @override
+  State<_ElevenLabsVoicePickerSheet> createState() => _ElevenLabsVoicePickerSheetState();
+}
+
+class _ElevenLabsVoicePickerSheetState extends State<_ElevenLabsVoicePickerSheet> {
+  late String _selectedId;
+  String? _previewingId;
+
+  static const _previewText = 'Hello, how are you today?';
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedId = widget.engine.voiceParam.isNotEmpty
+        ? widget.engine.voiceParam
+        : '21m00Tcm4TlvDq8ikWAM';
+  }
+
+  @override
+  void dispose() {
+    if (_previewingId != null) TtsService.stop();
+    super.dispose();
+  }
+
+  Future<void> _preview(String voiceId) async {
+    if (_previewingId == voiceId) {
+      await TtsService.stop();
+      if (mounted) setState(() => _previewingId = null);
+      return;
+    }
+    if (_previewingId != null) await TtsService.stop();
+    setState(() => _previewingId = voiceId);
+    final temp = widget.engine.copyWith(voiceParam: voiceId);
+    final bytes = await VoiceEngineService.fetchAudio(_previewText, temp);
+    if (bytes != null && mounted) await TtsService.playBytes(bytes);
+    if (mounted) setState(() => _previewingId = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFF7B2D8B);
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: const EdgeInsets.fromLTRB(0, 20, 0, 36),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Center(
+            child: Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFDDDDDD),
+                  borderRadius: BorderRadius.circular(2)),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Row(children: [
+              const Text('选择 ElevenLabs 声音',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const Icon(Icons.close_rounded, color: AppTheme.textTertiary),
+              ),
+            ]),
+          ),
+          SizedBox(
+            height: 380,
+            child: ListView.builder(
+              itemCount: VoiceEngine.elevenLabsVoices.length,
+              itemBuilder: (ctx, i) {
+                final v = VoiceEngine.elevenLabsVoices[i];
+                final id = v['id']!;
+                final name = v['name']!;
+                final selected = id == _selectedId;
+                final isPreviewing = id == _previewingId;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (i > 0) const Divider(height: 1, indent: 20),
+                    InkWell(
+                      onTap: () => setState(() => _selectedId = id),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 10, 12, 10),
+                        child: Row(children: [
+                          Icon(
+                            selected
+                                ? Icons.radio_button_checked_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            size: 20,
+                            color: selected ? accent : AppTheme.textTertiary,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(name,
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                                  color: selected ? accent : AppTheme.textPrimary)),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () => _preview(id),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: isPreviewing
+                                  ? const SizedBox(
+                                      width: 18, height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: accent))
+                                  : Icon(Icons.volume_up_rounded,
+                                      size: 20,
+                                      color: selected ? accent : AppTheme.textSecondary),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: accent,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  widget.onSave(_selectedId);
+                  Navigator.pop(context);
+                },
+                child: const Text('确认',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Microsoft Voice Picker Sheet ───────────────────────────────────────────────
+
+class _MicrosoftVoicePickerSheet extends StatefulWidget {
+  final VoiceEngine engine;
+  final void Function(String voice) onSave;
+
+  const _MicrosoftVoicePickerSheet({required this.engine, required this.onSave});
+
+  @override
+  State<_MicrosoftVoicePickerSheet> createState() => _MicrosoftVoicePickerSheetState();
+}
+
+class _MicrosoftVoicePickerSheetState extends State<_MicrosoftVoicePickerSheet> {
+  late String _selected;
+  String? _previewingVoice;
+
+  static const _previewText = 'Hello, how are you today?';
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.engine.voiceParam.isNotEmpty
+        ? widget.engine.voiceParam
+        : 'en-US-JennyNeural';
+  }
+
+  @override
+  void dispose() {
+    if (_previewingVoice != null) TtsService.stop();
+    super.dispose();
+  }
+
+  Future<void> _preview(String voice) async {
+    if (_previewingVoice == voice) {
+      await TtsService.stop();
+      if (mounted) setState(() => _previewingVoice = null);
+      return;
+    }
+    if (_previewingVoice != null) await TtsService.stop();
+    setState(() => _previewingVoice = voice);
+    final temp = widget.engine.copyWith(voiceParam: voice);
+    final bytes = await VoiceEngineService.fetchAudio(_previewText, temp);
+    if (bytes != null && mounted) await TtsService.playBytes(bytes);
+    if (mounted) setState(() => _previewingVoice = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 36, height: 4,
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE0E0E0),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(children: [
+              const Text('选择微软语音',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const Icon(Icons.close_rounded, color: AppTheme.textTertiary),
+              ),
+            ]),
+          ),
+          SizedBox(
+            height: 360,
+            child: ListView.builder(
+              itemCount: VoiceEngine.microsoftVoices.length,
+              itemBuilder: (ctx, i) {
+                final voice = VoiceEngine.microsoftVoices[i];
+                final selected = voice == _selected;
+                final isPreviewing = voice == _previewingVoice;
+                return ListTile(
+                  dense: true,
+                  title: Text(voice,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                          color: selected ? const Color(0xFF0078D4) : AppTheme.textPrimary)),
+                  trailing: GestureDetector(
+                    onTap: () => _preview(voice),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: isPreviewing
+                          ? const SizedBox(
+                              width: 18, height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Color(0xFF0078D4)))
+                          : Icon(Icons.volume_up_rounded,
+                              size: 20,
+                              color: selected
+                                  ? const Color(0xFF0078D4)
+                                  : AppTheme.textSecondary),
+                    ),
+                  ),
+                  onTap: () => setState(() => _selected = voice),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF0078D4),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                Navigator.pop(context);
+                widget.onSave(_selected);
+              },
+              child: const Text('保存', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+        ],
       ),
     );
   }

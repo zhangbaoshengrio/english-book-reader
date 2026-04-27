@@ -1198,9 +1198,9 @@ class _AiWordPanelState extends State<_AiWordPanel> {
               GestureDetector(
                 onTap: _toggleSpeak,
                 child: Icon(
-                  _speaking ? Icons.stop_circle_rounded : Icons.volume_up_rounded,
+                  _speaking ? Icons.pause_circle_rounded : Icons.play_circle_rounded,
                   size: 18,
-                  color: _speaking ? Colors.redAccent : _aiColor.withValues(alpha: 0.7),
+                  color: _speaking ? _aiColor : _aiColor.withValues(alpha: 0.7),
                 ),
               ),
               const SizedBox(width: 8),

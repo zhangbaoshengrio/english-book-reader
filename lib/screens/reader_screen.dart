@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -1062,6 +1063,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   Offset? _longPressDownPos;
   bool _suppressListener = false;
   bool _suppressOutside = false;
+  bool _isDragging = false;
   // Double-tap detection
   DateTime? _lastTapTime;
   Offset?   _lastTapPos;
@@ -1072,6 +1074,31 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     _wordRanges = _buildWordRanges(widget.text);
     _ctrl = _buildController();
     _ctrl.addListener(_onSelectionChanged);
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_onGlobalPointerEvent);
+  }
+
+  void _onGlobalPointerEvent(PointerEvent event) {
+    if (event is PointerUpEvent) {
+      // Finger lifted anywhere on screen — if there's a pending translate timer
+      // and selection is non-collapsed, fire immediately instead of waiting.
+      if (_translateTimer?.isActive == true) {
+        _translateTimer!.cancel();
+        _translateTimer = null;
+        final sel = _ctrl.selection;
+        if (!sel.isCollapsed && sel.start >= 0) {
+          final selected = widget.text.substring(sel.start, sel.end).trim();
+          if (selected.isNotEmpty && widget.autoTranslate && !_suppressListener) {
+            _suppressOutside = true;
+            _suppressOutsideTimer?.cancel();
+            _suppressOutsideTimer = Timer(const Duration(milliseconds: 600), () {
+              _suppressOutside = false;
+            });
+            final anchor = _getSelectionAnchor();
+            widget.onTranslate(selected, anchor);
+          }
+        }
+      }
+    }
   }
 
   void _onSelectionChanged() {
@@ -1081,15 +1108,16 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
     if (selected.isEmpty) return;
 
     if (_suppressListener) return; // programmatic single-word tap — no toolbar
+    if (_isDragging) return; // user is dragging selection handles — wait for release
 
     // Single exact word → already handled by onTap
     final isExactWord = _wordRanges.any((r) => r.$1 == sel.start && r.$2 == sel.end);
     if (isExactWord) return;
 
-    // Multi-word: debounce 400ms (only when autoTranslate is enabled)
+    // Multi-word: debounce 2000ms so dragging selection handles doesn't trigger translate
     if (!widget.autoTranslate) return;
     _translateTimer?.cancel();
-    _translateTimer = Timer(const Duration(milliseconds: 400), () {
+    _translateTimer = Timer(const Duration(milliseconds: 2000), () {
       if (!mounted) return;
       _suppressOutside = true;
       _suppressOutsideTimer?.cancel();
@@ -1136,6 +1164,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
 
   @override
   void dispose() {
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_onGlobalPointerEvent);
     _translateTimer?.cancel();
     _suppressOutsideTimer?.cancel();
     _longPressTimer?.cancel();
@@ -1300,10 +1329,16 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
       onPointerUp: (_) {
         _longPressTimer?.cancel();
         _longPressDownPos = null;
+        if (_isDragging) {
+          _isDragging = false;
+          // Trigger translate after drag ends
+          _onSelectionChanged();
+        }
       },
       onPointerCancel: (_) {
         _longPressTimer?.cancel();
         _longPressDownPos = null;
+        _isDragging = false;
       },
       onPointerMove: (event) {
         // Cancel long-press only when finger drifts >10 px from touch-down.
@@ -1313,6 +1348,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
             _longPressDownPos = null;
           }
         }
+        _isDragging = true;
       },
       child: TextField(
           controller: _ctrl,
