@@ -517,8 +517,27 @@ class _EngineRow extends StatefulWidget {
 
 class _EngineRowState extends State<_EngineRow> {
   bool _previewing = false;
+  bool _testing = false;
+  String? _testMsg; // null=idle, '✓ ...'=success, '✗ ...'=fail
 
   static const _previewText = 'Hello, how are you today?';
+
+  Future<void> _testEdgeConnection() async {
+    if (_testing) return;
+    setState(() { _testing = true; _testMsg = null; });
+    try {
+      final bytes = await VoiceEngineService.fetchAudio(_previewText, widget.engine);
+      if (bytes != null && bytes.isNotEmpty) {
+        setState(() { _testing = false; _testMsg = '✓ 连接成功'; });
+        TtsService.playBytes(bytes);
+      } else {
+        setState(() { _testing = false; _testMsg = '✗ 无返回数据'; });
+      }
+    } catch (e) {
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      setState(() { _testing = false; _testMsg = '✗ $msg'; });
+    }
+  }
 
   Future<void> _preview() async {
     if (_previewing) {
@@ -747,6 +766,39 @@ class _EngineRowState extends State<_EngineRow> {
                 value: VoiceEngine.edgeTtsVoiceNameFor(
                     engine.voiceParam.isNotEmpty ? engine.voiceParam : 'en-US-AriaNeural'),
                 onTap: widget.onVoicePicker ?? () {},
+              ),
+              const Divider(height: 1, indent: 60),
+              InkWell(
+                onTap: _testing ? null : _testEdgeConnection,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(60, 10, 16, 10),
+                  child: Row(children: [
+                    if (_testing)
+                      const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: Color(0xFF00897B)))
+                    else
+                      const Icon(Icons.wifi_tethering_rounded,
+                          size: 16, color: AppTheme.textSecondary),
+                    const SizedBox(width: 8),
+                    Text(_testing ? '测试中…' : '测试连接',
+                        style: const TextStyle(
+                            fontSize: 13, color: AppTheme.textSecondary)),
+                    if (_testMsg != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        _testMsg!,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _testMsg!.startsWith('✓')
+                              ? Colors.green.shade600
+                              : Colors.red.shade600,
+                        ),
+                      ),
+                    ],
+                  ]),
+                ),
               ),
             ],
             // ── Speed slider ──────────────────────────────────────────
