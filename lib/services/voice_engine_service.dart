@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +15,7 @@ class VoiceEngineType {
   static const customUrl    = 'customUrl';    // custom HTTP endpoint returning audio
   static const elevenLabsTts  = 'elevenLabsTts';  // ElevenLabs TTS API
   static const volcengineTts  = 'volcengineTts';  // 火山引擎 TTS API
+  static const edgeTts        = 'edgeTts';        // Microsoft Edge TTS (free, WebSocket)
 }
 
 // ── Credential field descriptor ───────────────────────────────────────────────
@@ -151,6 +154,14 @@ class VoiceEngine {
       voiceParam: '',
       speed:      1.0,
     ),
+    VoiceEngine(
+      id:         'edge_tts',
+      name:       'Edge TTS（免费）',
+      type:       VoiceEngineType.edgeTts,
+      enabled:    true,
+      voiceParam: 'en-US-AriaNeural',
+      speed:      1.0,
+    ),
   ];
 
   // ── Credential field definitions ──────────────────────────────────────────
@@ -174,6 +185,41 @@ class VoiceEngine {
       VoiceCredentialField(key: 'resourceId', label: 'Resource ID', hint: 'seed-icl-2.0'),
     ],
   };
+
+  // Edge TTS voices (free, no API key required)
+  static const List<Map<String, String>> edgeTtsVoices = [
+    // en-US
+    {'name': 'Aria (美式女)',        'id': 'en-US-AriaNeural'},
+    {'name': 'Jenny (美式女)',       'id': 'en-US-JennyNeural'},
+    {'name': 'Guy (美式男)',         'id': 'en-US-GuyNeural'},
+    {'name': 'Davis (美式男)',       'id': 'en-US-DavisNeural'},
+    {'name': 'Ana (美式女/儿童)',    'id': 'en-US-AnaNeural'},
+    {'name': 'Christopher (美式男)', 'id': 'en-US-ChristopherNeural'},
+    {'name': 'Eric (美式男)',        'id': 'en-US-EricNeural'},
+    {'name': 'Michelle (美式女)',    'id': 'en-US-MichelleNeural'},
+    {'name': 'Roger (美式男)',       'id': 'en-US-RogerNeural'},
+    {'name': 'Steffan (美式男)',     'id': 'en-US-SteffanNeural'},
+    // en-GB
+    {'name': 'Sonia (英式女)',       'id': 'en-GB-SoniaNeural'},
+    {'name': 'Ryan (英式男)',        'id': 'en-GB-RyanNeural'},
+    {'name': 'Libby (英式女)',       'id': 'en-GB-LibbyNeural'},
+    {'name': 'Maisie (英式女/儿童)', 'id': 'en-GB-MaisieNeural'},
+    // en-AU
+    {'name': 'Natasha (澳式女)',     'id': 'en-AU-NatashaNeural'},
+    {'name': 'William (澳式男)',     'id': 'en-AU-WilliamNeural'},
+    // en-IN
+    {'name': 'Neerja (印度女)',      'id': 'en-IN-NeerjaNeural'},
+    {'name': 'Prabhat (印度男)',     'id': 'en-IN-PrabhatNeural'},
+    // en-CA
+    {'name': 'Clara (加拿大女)',     'id': 'en-CA-ClaraNeural'},
+    {'name': 'Liam (加拿大男)',      'id': 'en-CA-LiamNeural'},
+  ];
+
+  static String edgeTtsVoiceNameFor(String id) {
+    final v = edgeTtsVoices.firstWhere(
+        (v) => v['id'] == id, orElse: () => {'name': id, 'id': id});
+    return v['name']!;
+  }
 
   // Microsoft Azure TTS common English neural voices
   static const List<String> microsoftVoices = [
@@ -454,6 +500,8 @@ class VoiceEngineService {
         return _elevenLabsTts(text, engine);
       case VoiceEngineType.volcengineTts:
         return _volcengineTts(text, engine);
+      case VoiceEngineType.edgeTts:
+        return _edgeTts(text, engine);
       case VoiceEngineType.customUrl:
         return _customTts(text, engine);
       default:
@@ -639,5 +687,143 @@ class VoiceEngineService {
       if (resp.statusCode == 200) return resp.bodyBytes;
     } catch (_) {}
     return null;
+  }
+
+  // ── Edge TTS (Microsoft Edge WebSocket, free) ─────────────────────────────
+
+  static Future<List<int>?> _edgeTts(String text, VoiceEngine engine) async {
+    final voice = engine.voiceParam.isNotEmpty
+        ? engine.voiceParam
+        : 'en-US-AriaNeural';
+
+    // Speed: Edge TTS uses rate as percentage offset, e.g. "+0%", "+20%", "-20%"
+    final speedOffset = ((engine.speed - 1.0) * 100).round();
+    final rateStr = speedOffset >= 0 ? '+$speedOffset%' : '$speedOffset%';
+
+    // Unique request ID (32-char hex, uppercase)
+    final requestId = _generateRequestId();
+    final now = _edgeTtsTimestamp();
+
+    // Headers for WebSocket handshake
+    final wsHeaders = {
+      'Pragma': 'no-cache',
+      'Cache-Control': 'no-cache',
+      'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+    };
+
+    const wsUrl =
+        'wss://speech.platform.bing.com/consumer/speech/synthesize/'
+        'readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4'
+        '&ConnectionId=';
+
+    try {
+      final ws = await WebSocket.connect(
+        '$wsUrl$requestId',
+        headers: wsHeaders,
+      ).timeout(const Duration(seconds: 10));
+
+      // 1. Send speech config message
+      final configMsg =
+          'X-Timestamp:$now\r\n'
+          'Content-Type:application/json; charset=utf-8\r\n'
+          'Path:speech.config\r\n\r\n'
+          '{"context":{"synthesis":{"audio":{"metadataoptions":{'
+          '"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
+          '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}';
+      ws.add(configMsg);
+
+      // 2. Send SSML request
+      final escapedText = text
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;');
+      final ssml =
+          '<speak version=\'1.0\' xmlns=\'http://www.w3.org/2001/10/synthesis\' '
+          'xmlns:mstts=\'http://www.w3.org/2001/mstts\' xml:lang=\'en-US\'>'
+          '<voice name=\'$voice\'>'
+          '<prosody rate=\'$rateStr\'>$escapedText</prosody>'
+          '</voice></speak>';
+      final ssmlMsg =
+          'X-RequestId:$requestId\r\n'
+          'Content-Type:application/ssml+xml\r\n'
+          'X-Timestamp:$now\r\n'
+          'Path:ssml\r\n\r\n'
+          '$ssml';
+      ws.add(ssmlMsg);
+
+      // 3. Collect audio chunks
+      final audioData = <int>[];
+      final completer = Completer<List<int>?>();
+
+      ws.listen(
+        (dynamic message) {
+          if (completer.isCompleted) return;
+          if (message is String) {
+            // Check for turn.end signal
+            if (message.contains('Path:turn.end')) {
+              ws.close();
+              completer.complete(audioData.isNotEmpty ? audioData : null);
+            }
+          } else if (message is List<int>) {
+            // Binary frame: find the audio header separator
+            // Format: 2-byte header length + header bytes + audio bytes
+            final bytes = Uint8List.fromList(message);
+            if (bytes.length > 2) {
+              final headerLen = (bytes[0] << 8) | bytes[1];
+              if (bytes.length > 2 + headerLen) {
+                audioData.addAll(bytes.sublist(2 + headerLen));
+              }
+            }
+          }
+        },
+        onError: (e) {
+          if (!completer.isCompleted) completer.complete(null);
+        },
+        onDone: () {
+          if (!completer.isCompleted) {
+            completer.complete(audioData.isNotEmpty ? audioData : null);
+          }
+        },
+      );
+
+      return await completer.future.timeout(const Duration(seconds: 15),
+          onTimeout: () {
+        ws.close();
+        return null;
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _generateRequestId() {
+    final rand = DateTime.now().microsecondsSinceEpoch;
+    final hex = rand.toRadixString(16).padLeft(16, '0');
+    // Return 32-char hex string
+    return (hex + hex).substring(0, 32).toUpperCase();
+  }
+
+  static String _edgeTtsTimestamp() {
+    final now = DateTime.now().toUtc();
+    // Format: Wed, 01 Jan 2025 00:00:00 GMT
+    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final wd = weekdays[now.weekday - 1];
+    final mo = months[now.month - 1];
+    final d = now.day.toString().padLeft(2, '0');
+    final y = now.year.toString();
+    final h = now.hour.toString().padLeft(2, '0');
+    final mi = now.minute.toString().padLeft(2, '0');
+    final s = now.second.toString().padLeft(2, '0');
+    return '$wd, $d $mo $y $h:$mi:$s GMT';
   }
 }

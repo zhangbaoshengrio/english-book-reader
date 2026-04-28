@@ -206,6 +206,21 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
     );
   }
 
+  void _showEdgeVoicePicker(VoiceEngine engine) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _EdgeVoicePickerSheet(
+        engine: engine,
+        onSave: (voiceId) async {
+          await VoiceEngineService.saveEngineVoiceStyle(engine.id, voice: voiceId);
+          await _load();
+        },
+      ),
+    );
+  }
+
   void _showStylePicker(VoiceEngine engine) {
     showModalBottomSheet(
       context: context,
@@ -399,10 +414,12 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
                       final isMicrosoft = engine.id == 'microsoft_tts';
                       final isElevenLabs = engine.id == 'elevenlabs_tts';
                       final isVolcengine = engine.id == 'volcengine_tts';
+                      final isEdge = engine.id == 'edge_tts';
                       final hasSpeed = engine.type == VoiceEngineType.builtinTts ||
                           engine.type == VoiceEngineType.openaiApi ||
                           engine.type == VoiceEngineType.microsoftTts ||
-                          engine.type == VoiceEngineType.volcengineTts;
+                          engine.type == VoiceEngineType.volcengineTts ||
+                          engine.type == VoiceEngineType.edgeTts;
                       return _EngineRow(
                         engine: engine,
                         isActive: engine.id == _activeId,
@@ -426,7 +443,9 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
                                     ? () => _showElevenLabsVoicePicker(engine)
                                     : isVolcengine
                                         ? () => _showVolcengineVoicePicker(engine)
-                                        : null,
+                                        : isEdge
+                                            ? () => _showEdgeVoicePicker(engine)
+                                            : null,
                         onStylePicker: engine.id == 'openai_tts'
                             ? () => _showStylePicker(engine)
                             : null,
@@ -529,6 +548,7 @@ class _EngineRowState extends State<_EngineRow> {
     final isMicrosoft = engine.id == 'microsoft_tts';
     final isElevenLabs = engine.id == 'elevenlabs_tts';
     final isVolcengine = engine.id == 'volcengine_tts';
+    final isEdge = engine.id == 'edge_tts';
     final speedMin = isBuiltin ? 0.3 : 0.25;
     final speedMax = isBuiltin ? 1.5 : 4.0;
     final speedDivisions = isBuiltin ? 12 : 31;
@@ -579,8 +599,8 @@ class _EngineRowState extends State<_EngineRow> {
                   ),
                 ),
               ),
-              // 试听 button (OpenAI / Microsoft / ElevenLabs / 火山引擎 TTS)
-              if (isOpenAi || isMicrosoft || isElevenLabs || isVolcengine)
+              // 试听 button (OpenAI / Microsoft / ElevenLabs / 火山引擎 / Edge TTS)
+              if (isOpenAi || isMicrosoft || isElevenLabs || isVolcengine || isEdge)
                 GestureDetector(
                   onTap: _preview,
                   child: Padding(
@@ -715,6 +735,17 @@ class _EngineRowState extends State<_EngineRow> {
                 valueColor: engine.voiceParam.isNotEmpty
                     ? null
                     : AppTheme.textTertiary,
+                onTap: widget.onVoicePicker ?? () {},
+              ),
+            ],
+            // ── Edge TTS sub-rows ─────────────────────────────────────
+            if (isEdge) ...[
+              const Divider(height: 1, indent: 60),
+              _SubRow(
+                icon: Icons.record_voice_over_rounded,
+                label: '声音',
+                value: VoiceEngine.edgeTtsVoiceNameFor(
+                    engine.voiceParam.isNotEmpty ? engine.voiceParam : 'en-US-AriaNeural'),
                 onTap: widget.onVoicePicker ?? () {},
               ),
             ],
@@ -1190,6 +1221,7 @@ class _TypeTag extends StatelessWidget {
       VoiceEngineType.microsoftTts => ('API',  const Color(0xFF0078D4)),
       VoiceEngineType.elevenLabsTts  => ('API', const Color(0xFF7B2D8B)),
       VoiceEngineType.volcengineTts  => ('API', const Color(0xFF1664FF)),
+      VoiceEngineType.edgeTts        => ('免费', const Color(0xFF00897B)),
       _                              => ('自定义', AppTheme.primary),
     };
     return Container(
@@ -1216,6 +1248,7 @@ class _VoiceBadge extends StatelessWidget {
     'microsoft_tts':   Color(0xFF0078D4),
     'elevenlabs_tts':  Color(0xFF7B2D8B),
     'volcengine_tts':  Color(0xFF1664FF),
+    'edge_tts':        Color(0xFF00897B),
   };
 
   Color get _color => _colors[engine.id] ?? AppTheme.primary;
@@ -1225,6 +1258,7 @@ class _VoiceBadge extends StatelessWidget {
     VoiceEngineType.microsoftTts  => 'M',
     VoiceEngineType.elevenLabsTts  => 'E',
     VoiceEngineType.volcengineTts  => 'V',
+    VoiceEngineType.edgeTts        => 'Ed',
     _                              => engine.name.isNotEmpty ? engine.name[0].toUpperCase() : '?',
   };
   bool get _isEmoji => engine.type == VoiceEngineType.builtinTts;
@@ -2206,6 +2240,165 @@ class _MicrosoftVoicePickerSheetState extends State<_MicrosoftVoicePickerSheet> 
                 widget.onSave(_selected);
               },
               child: const Text('保存', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Edge TTS voice picker ──────────────────────────────────────────────────────
+
+class _EdgeVoicePickerSheet extends StatefulWidget {
+  final VoiceEngine engine;
+  final void Function(String voiceId) onSave;
+
+  const _EdgeVoicePickerSheet({required this.engine, required this.onSave});
+
+  @override
+  State<_EdgeVoicePickerSheet> createState() => _EdgeVoicePickerSheetState();
+}
+
+class _EdgeVoicePickerSheetState extends State<_EdgeVoicePickerSheet> {
+  late String _selectedId;
+  String? _previewingId;
+
+  static const _previewText = 'Hello, how are you today?';
+  static const _accent = Color(0xFF00897B);
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedId = widget.engine.voiceParam.isNotEmpty
+        ? widget.engine.voiceParam
+        : 'en-US-AriaNeural';
+  }
+
+  @override
+  void dispose() {
+    if (_previewingId != null) TtsService.stop();
+    super.dispose();
+  }
+
+  Future<void> _preview(String voiceId) async {
+    if (_previewingId == voiceId) {
+      await TtsService.stop();
+      if (mounted) setState(() => _previewingId = null);
+      return;
+    }
+    if (_previewingId != null) await TtsService.stop();
+    setState(() => _previewingId = voiceId);
+    final temp = widget.engine.copyWith(voiceParam: voiceId);
+    final bytes = await VoiceEngineService.fetchAudio(_previewText, temp);
+    if (bytes != null && mounted) await TtsService.playBytes(bytes);
+    if (mounted) setState(() => _previewingId = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: const EdgeInsets.fromLTRB(0, 20, 0, 36),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Center(
+            child: Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFDDDDDD),
+                  borderRadius: BorderRadius.circular(2)),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Row(children: [
+              const Text('选择 Edge TTS 声音',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const Icon(Icons.close_rounded, color: AppTheme.textTertiary),
+              ),
+            ]),
+          ),
+          SizedBox(
+            height: 400,
+            child: ListView.builder(
+              itemCount: VoiceEngine.edgeTtsVoices.length,
+              itemBuilder: (ctx, i) {
+                final v = VoiceEngine.edgeTtsVoices[i];
+                final id = v['id']!;
+                final name = v['name']!;
+                final selected = id == _selectedId;
+                final isPreviewing = id == _previewingId;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (i > 0) const Divider(height: 1, indent: 20),
+                    InkWell(
+                      onTap: () => setState(() => _selectedId = id),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 10, 12, 10),
+                        child: Row(children: [
+                          Icon(
+                            selected
+                                ? Icons.radio_button_checked_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            size: 20,
+                            color: selected ? _accent : AppTheme.textTertiary,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(name,
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                                  color: selected ? _accent : AppTheme.textPrimary)),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () => _preview(id),
+                            child: Padding(
+                              padding: const EdgeInsets.all(6),
+                              child: isPreviewing
+                                  ? const SizedBox(
+                                      width: 18, height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: _accent))
+                                  : Icon(Icons.volume_up_rounded,
+                                      size: 20,
+                                      color: selected ? _accent : AppTheme.textSecondary),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _accent,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  Navigator.pop(context);
+                  widget.onSave(_selectedId);
+                },
+                child: const Text('保存', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              ),
             ),
           ),
           SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
