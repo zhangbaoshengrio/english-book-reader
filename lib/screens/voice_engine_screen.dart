@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/ai_service.dart';
 import '../services/settings_service.dart';
 import '../services/tts_service.dart';
@@ -772,32 +773,60 @@ class _EngineRowState extends State<_EngineRow> {
                 onTap: _testing ? null : _testEdgeConnection,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(60, 10, 16, 10),
-                  child: Row(children: [
-                    if (_testing)
-                      const SizedBox(
-                        width: 14, height: 14,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 1.5, color: Color(0xFF00897B)))
-                    else
-                      const Icon(Icons.wifi_tethering_rounded,
-                          size: 16, color: AppTheme.textSecondary),
-                    const SizedBox(width: 8),
-                    Text(_testing ? '测试中…' : '测试连接',
-                        style: const TextStyle(
-                            fontSize: 13, color: AppTheme.textSecondary)),
-                    if (_testMsg != null) ...[
-                      const SizedBox(width: 8),
-                      Text(
-                        _testMsg!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _testMsg!.startsWith('✓')
-                              ? Colors.green.shade600
-                              : Colors.red.shade600,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        if (_testing)
+                          const SizedBox(
+                            width: 14, height: 14,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 1.5, color: Color(0xFF00897B)))
+                        else
+                          const Icon(Icons.wifi_tethering_rounded,
+                              size: 16, color: AppTheme.textSecondary),
+                        const SizedBox(width: 8),
+                        Text(_testing ? '测试中…' : '测试连接',
+                            style: const TextStyle(
+                                fontSize: 13, color: AppTheme.textSecondary)),
+                      ]),
+                      if (_testMsg != null) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _testMsg!,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: _testMsg!.startsWith('✓')
+                                      ? Colors.green.shade600
+                                      : Colors.red.shade600,
+                                ),
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () {
+                                Clipboard.setData(ClipboardData(text: _testMsg!));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('已复制'),
+                                    duration: Duration(seconds: 1),
+                                  ),
+                                );
+                              },
+                              child: const Padding(
+                                padding: EdgeInsets.only(left: 8),
+                                child: Icon(Icons.copy_rounded,
+                                    size: 14, color: AppTheme.textTertiary),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
+                      ],
                     ],
-                  ]),
+                  ),
                 ),
               ),
             ],
