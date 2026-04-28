@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:web_socket_channel/io.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 // ── Engine type constants ──────────────────────────────────────────────────────
 
@@ -700,80 +702,79 @@ class VoiceEngineService {
     final speedOffset = ((engine.speed - 1.0) * 100).round();
     final rateStr = speedOffset >= 0 ? '+$speedOffset%' : '$speedOffset%';
 
-    // Unique request ID (32-char hex, uppercase)
     final requestId = _generateRequestId();
     final now = _edgeTtsTimestamp();
-
-    // Headers for WebSocket handshake
-    final wsHeaders = {
-      'Pragma': 'no-cache',
-      'Cache-Control': 'no-cache',
-      'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
-    };
 
     const wsUrl =
         'wss://speech.platform.bing.com/consumer/speech/synthesize/'
         'readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4'
         '&ConnectionId=';
 
+    final uri = Uri.parse('$wsUrl$requestId');
+
+    WebSocketChannel? channel;
     try {
-      final ws = await WebSocket.connect(
-        '$wsUrl$requestId',
-        headers: wsHeaders,
-      ).timeout(const Duration(seconds: 10));
+      channel = IOWebSocketChannel.connect(
+        uri,
+        headers: {
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache',
+          'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+        },
+        connectTimeout: const Duration(seconds: 10),
+      );
 
-      // 1. Send speech config message
-      final configMsg =
-          'X-Timestamp:$now\r\n'
-          'Content-Type:application/json; charset=utf-8\r\n'
-          'Path:speech.config\r\n\r\n'
-          '{"context":{"synthesis":{"audio":{"metadataoptions":{'
-          '"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
-          '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}';
-      ws.add(configMsg);
+      // Wait for connection to be established
+      await channel.ready.timeout(const Duration(seconds: 10));
 
-      // 2. Send SSML request
+      // 1. Send speech config
+      channel.sink.add(
+        'X-Timestamp:$now\r\n'
+        'Content-Type:application/json; charset=utf-8\r\n'
+        'Path:speech.config\r\n\r\n'
+        '{"context":{"synthesis":{"audio":{"metadataoptions":{'
+        '"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
+        '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}',
+      );
+
+      // 2. Send SSML
       final escapedText = text
           .replaceAll('&', '&amp;')
           .replaceAll('<', '&lt;')
           .replaceAll('>', '&gt;')
           .replaceAll('"', '&quot;');
       final ssml =
-          '<speak version=\'1.0\' xmlns=\'http://www.w3.org/2001/10/synthesis\' '
-          'xmlns:mstts=\'http://www.w3.org/2001/mstts\' xml:lang=\'en-US\'>'
-          '<voice name=\'$voice\'>'
-          '<prosody rate=\'$rateStr\'>$escapedText</prosody>'
+          "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+          "xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>"
+          "<voice name='$voice'>"
+          "<prosody rate='$rateStr'>$escapedText</prosody>"
           '</voice></speak>';
-      final ssmlMsg =
-          'X-RequestId:$requestId\r\n'
-          'Content-Type:application/ssml+xml\r\n'
-          'X-Timestamp:$now\r\n'
-          'Path:ssml\r\n\r\n'
-          '$ssml';
-      ws.add(ssmlMsg);
+      channel.sink.add(
+        'X-RequestId:$requestId\r\n'
+        'Content-Type:application/ssml+xml\r\n'
+        'X-Timestamp:$now\r\n'
+        'Path:ssml\r\n\r\n'
+        '$ssml',
+      );
 
       // 3. Collect audio chunks
       final audioData = <int>[];
       final completer = Completer<List<int>?>();
 
-      ws.listen(
+      channel.stream.listen(
         (dynamic message) {
           if (completer.isCompleted) return;
           if (message is String) {
-            // Check for turn.end signal
             if (message.contains('Path:turn.end')) {
-              ws.close();
               completer.complete(audioData.isNotEmpty ? audioData : null);
             }
           } else if (message is List<int>) {
-            // Binary frame: header and audio are separated by \r\n\r\n
+            // Binary frame: find \r\n\r\n separator, audio follows
             final bytes = Uint8List.fromList(message);
-            // Find \r\n\r\n (0x0D 0x0A 0x0D 0x0A) separator
             int sepIdx = -1;
             for (int i = 0; i < bytes.length - 3; i++) {
               if (bytes[i] == 0x0D && bytes[i+1] == 0x0A &&
@@ -788,7 +789,9 @@ class VoiceEngineService {
           }
         },
         onError: (e) {
-          if (!completer.isCompleted) completer.complete(null);
+          if (!completer.isCompleted) {
+            completer.completeError(Exception('Edge TTS 流错误: $e'));
+          }
         },
         onDone: () {
           if (!completer.isCompleted) {
@@ -797,13 +800,15 @@ class VoiceEngineService {
         },
       );
 
-      return await completer.future.timeout(const Duration(seconds: 15),
-          onTimeout: () {
-        ws.close();
-        return null;
-      });
+      final result = await completer.future.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () => throw Exception('Edge TTS 超时'),
+      );
+      return result;
     } catch (e) {
       throw Exception('Edge TTS 连接失败: $e');
+    } finally {
+      channel?.sink.close();
     }
   }
 

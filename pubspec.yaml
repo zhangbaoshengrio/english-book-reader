@@ -1,7 +1,7 @@
 name: english_reader
 description: English Book Reader with Vocabulary Builder
 publish_to: 'none'
-version: 1.11.1+1
+version: 1.11.2+1
 
 environment:
   sdk: ^3.11.1
@@ -13,6 +13,7 @@ dependencies:
 
   # Network
   http: ^1.2.2
+  web_socket_channel: ^3.0.1
 
   # Storage
   sqflite: ^2.3.3+1
