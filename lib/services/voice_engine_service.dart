@@ -771,14 +771,19 @@ class VoiceEngineService {
               completer.complete(audioData.isNotEmpty ? audioData : null);
             }
           } else if (message is List<int>) {
-            // Binary frame: find the audio header separator
-            // Format: 2-byte header length + header bytes + audio bytes
+            // Binary frame: header and audio are separated by \r\n\r\n
             final bytes = Uint8List.fromList(message);
-            if (bytes.length > 2) {
-              final headerLen = (bytes[0] << 8) | bytes[1];
-              if (bytes.length > 2 + headerLen) {
-                audioData.addAll(bytes.sublist(2 + headerLen));
+            // Find \r\n\r\n (0x0D 0x0A 0x0D 0x0A) separator
+            int sepIdx = -1;
+            for (int i = 0; i < bytes.length - 3; i++) {
+              if (bytes[i] == 0x0D && bytes[i+1] == 0x0A &&
+                  bytes[i+2] == 0x0D && bytes[i+3] == 0x0A) {
+                sepIdx = i + 4;
+                break;
               }
+            }
+            if (sepIdx > 0 && sepIdx < bytes.length) {
+              audioData.addAll(bytes.sublist(sepIdx));
             }
           }
         },
@@ -797,8 +802,8 @@ class VoiceEngineService {
         ws.close();
         return null;
       });
-    } catch (_) {
-      return null;
+    } catch (e) {
+      throw Exception('Edge TTS 连接失败: $e');
     }
   }
 
