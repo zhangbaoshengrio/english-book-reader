@@ -237,6 +237,17 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
     );
   }
 
+  bool _aiTesting = false;
+
+  Future<void> _testAiEngine() async {
+    if (_aiTesting) return;
+    setState(() => _aiTesting = true);
+    try {
+      await TtsService.speakAi('Hello, this is a test. 这是一个测试。');
+    } catch (_) {}
+    if (mounted) setState(() => _aiTesting = false);
+  }
+
   void _showAiEnginePicker() {
     showDialog<String>(
       context: context,
@@ -394,6 +405,43 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
                           size: 20, color: AppTheme.textTertiary),
                     ]),
                   ),
+                ),
+                const Divider(height: 1, indent: 16, endIndent: 0),
+                // ── AI 引擎测试按钮 ─────────────────────────────────────────
+                Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: Row(children: [
+                    const Icon(Icons.play_circle_outline_rounded,
+                        size: 20, color: AppTheme.textSecondary),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text('测试 AI 朗读引擎',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                    ),
+                    GestureDetector(
+                      onTap: _aiTesting ? null : _testAiEngine,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: _aiTesting
+                              ? AppTheme.primary.withValues(alpha: 0.4)
+                              : AppTheme.primary,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: _aiTesting
+                            ? const SizedBox(
+                                width: 14, height: 14,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white))
+                            : const Text('播放',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  ]),
                 ),
                 const Divider(height: 1),
                 Padding(
