@@ -2,11 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:web_socket_channel/io.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 // ── Engine type constants ──────────────────────────────────────────────────────
 
@@ -698,125 +697,273 @@ class VoiceEngineService {
         ? engine.voiceParam
         : 'en-US-AriaNeural';
 
-    // Speed: Edge TTS uses rate as percentage offset, e.g. "+0%", "+20%", "-20%"
     final speedOffset = ((engine.speed - 1.0) * 100).round();
     final rateStr = speedOffset >= 0 ? '+$speedOffset%' : '$speedOffset%';
 
     final requestId = _generateRequestId();
     final now = _edgeTtsTimestamp();
 
-    const wsUrl =
-        'wss://speech.platform.bing.com/consumer/speech/synthesize/'
-        'readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4'
-        '&ConnectionId=';
+    // Build the path+query manually as a plain string to avoid Uri encoding bugs
+    const host = 'speech.platform.bing.com';
+    const token = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+    final secMsGec = _generateSecMsGec(token);
+    const secMsGecVersion = '1-143.0.3650.75';
+    final muid = _generateMuid();
+    final pathAndQuery =
+        '/consumer/speech/synthesize/readaloud/edge/v1'
+        '?TrustedClientToken=$token'
+        '&ConnectionId=$requestId'
+        '&Sec-MS-GEC=$secMsGec'
+        '&Sec-MS-GEC-Version=$secMsGecVersion';
 
-    final uri = Uri.parse('$wsUrl$requestId');
-
-    WebSocketChannel? channel;
+    SecureSocket? socket;
     try {
-      channel = IOWebSocketChannel.connect(
-        uri,
-        headers: {
-          'Pragma': 'no-cache',
-          'Cache-Control': 'no-cache',
-          'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
-        },
-        connectTimeout: const Duration(seconds: 10),
+      // Connect via TLS directly — no Uri parsing involved
+      socket = await SecureSocket.connect(
+        host,
+        443,
+        timeout: const Duration(seconds: 10),
       );
 
-      // Wait for connection to be established
-      await channel.ready.timeout(const Duration(seconds: 10));
+      // WebSocket handshake key (base64 of 16 random bytes)
+      final keyBytes = List<int>.generate(16, (i) =>
+          (requestId.codeUnitAt(i % requestId.length) ^ i) & 0xFF);
+      final wsKey = base64Encode(keyBytes);
 
-      // 1. Send speech config
-      channel.sink.add(
-        'X-Timestamp:$now\r\n'
-        'Content-Type:application/json; charset=utf-8\r\n'
-        'Path:speech.config\r\n\r\n'
-        '{"context":{"synthesis":{"audio":{"metadataoptions":{'
-        '"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
-        '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}',
-      );
+      // Send HTTP Upgrade request with permessage-deflate extension
+      final handshake =
+          'GET $pathAndQuery HTTP/1.1\r\n'
+          'Host: $host\r\n'
+          'Upgrade: websocket\r\n'
+          'Connection: Upgrade\r\n'
+          'Sec-WebSocket-Key: $wsKey\r\n'
+          'Sec-WebSocket-Version: 13\r\n'
+          'Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n'
+          'Pragma: no-cache\r\n'
+          'Cache-Control: no-cache\r\n'
+          'Origin: chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold\r\n'
+          'Accept-Language: en-US,en;q=0.9\r\n'
+          'Cookie: muid=$muid;\r\n'
+          'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+              'AppleWebKit/537.36 (KHTML, like Gecko) '
+              'Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0\r\n'
+          '\r\n';
+      socket.add(utf8.encode(handshake));
 
-      // 2. Send SSML
-      final escapedText = text
-          .replaceAll('&', '&amp;')
-          .replaceAll('<', '&lt;')
-          .replaceAll('>', '&gt;')
-          .replaceAll('"', '&quot;');
-      final ssml =
-          "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
-          "xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>"
-          "<voice name='$voice'>"
-          "<prosody rate='$rateStr'>$escapedText</prosody>"
-          '</voice></speak>';
-      channel.sink.add(
-        'X-RequestId:$requestId\r\n'
-        'Content-Type:application/ssml+xml\r\n'
-        'X-Timestamp:$now\r\n'
-        'Path:ssml\r\n\r\n'
-        '$ssml',
-      );
-
-      // 3. Collect audio chunks
-      final audioData = <int>[];
-      final completer = Completer<List<int>?>();
-
-      channel.stream.listen(
-        (dynamic message) {
-          if (completer.isCompleted) return;
-          if (message is String) {
-            if (message.contains('Path:turn.end')) {
-              completer.complete(audioData.isNotEmpty ? audioData : null);
-            }
-          } else if (message is List<int>) {
-            // Binary frame: find \r\n\r\n separator, audio follows
-            final bytes = Uint8List.fromList(message);
-            int sepIdx = -1;
-            for (int i = 0; i < bytes.length - 3; i++) {
-              if (bytes[i] == 0x0D && bytes[i+1] == 0x0A &&
-                  bytes[i+2] == 0x0D && bytes[i+3] == 0x0A) {
-                sepIdx = i + 4;
-                break;
-              }
-            }
-            if (sepIdx > 0 && sepIdx < bytes.length) {
-              audioData.addAll(bytes.sublist(sepIdx));
-            }
-          }
-        },
-        onError: (e) {
-          if (!completer.isCompleted) {
-            completer.completeError(Exception('Edge TTS 流错误: $e'));
-          }
-        },
-        onDone: () {
-          if (!completer.isCompleted) {
-            completer.complete(audioData.isNotEmpty ? audioData : null);
-          }
-        },
-      );
-
-      final result = await completer.future.timeout(
-        const Duration(seconds: 20),
-        onTimeout: () => throw Exception('Edge TTS 超时'),
-      );
-      return result;
+      // Use a single listen over the entire session (header + audio)
+      return await _edgeTtsSession(
+          socket, requestId, now, voice, rateStr, escapedFor(text));
     } catch (e) {
       throw Exception('Edge TTS 连接失败: $e');
     } finally {
-      channel?.sink.close();
+      socket?.destroy();
     }
   }
 
+  static String escapedFor(String text) => text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
+
+  // Send a masked WebSocket text frame to the socket
+  static void _wsSendText(SecureSocket socket, String msg) {
+    final payload = utf8.encode(msg);
+    const mask = [0x37, 0xfa, 0x21, 0x3d];
+    final masked = List<int>.generate(
+        payload.length, (i) => payload[i] ^ mask[i % 4]);
+    final frame = <int>[0x81]; // FIN + text opcode
+    if (payload.length < 126) {
+      frame.add(0x80 | payload.length);
+    } else if (payload.length < 65536) {
+      frame.add(0x80 | 126);
+      frame.add((payload.length >> 8) & 0xFF);
+      frame.add(payload.length & 0xFF);
+    } else {
+      frame.add(0x80 | 127);
+      for (int shift = 56; shift >= 0; shift -= 8) {
+        frame.add((payload.length >> shift) & 0xFF);
+      }
+    }
+    frame.addAll(mask);
+    frame.addAll(masked);
+    socket.add(frame);
+  }
+
+  /// Single-listen session: HTTP upgrade → send messages → collect audio.
+  static Future<List<int>?> _edgeTtsSession(
+    SecureSocket socket,
+    String requestId,
+    String now,
+    String voice,
+    String rateStr,
+    String escapedText,
+  ) async {
+    final completer = Completer<List<int>?>();
+    final buf = <int>[];
+    bool handshakeDone = false;
+    final audioData = <int>[];
+
+    final timer = Timer(const Duration(seconds: 30), () {
+      if (!completer.isCompleted) {
+        completer.completeError(Exception(
+            handshakeDone ? 'Edge TTS 超时' : '握手超时'));
+      }
+    });
+
+    socket.listen(
+      (chunk) {
+        if (completer.isCompleted) return;
+        buf.addAll(chunk);
+
+        if (!handshakeDone) {
+          // Looking for end of HTTP headers (\r\n\r\n)
+          for (int i = 0; i < buf.length - 3; i++) {
+            if (buf[i] == 0x0D && buf[i+1] == 0x0A &&
+                buf[i+2] == 0x0D && buf[i+3] == 0x0A) {
+              final responseHead = utf8.decode(buf.sublist(0, i), allowMalformed: true);
+              if (!responseHead.contains('101')) {
+                timer.cancel();
+                final short = responseHead.length > 500
+                    ? responseHead.substring(0, 500) : responseHead;
+                completer.completeError(Exception('握手失败:\n$short'));
+                return;
+              }
+              handshakeDone = true;
+              // Keep only bytes after the header
+              final remaining = buf.sublist(i + 4);
+              buf.clear();
+              buf.addAll(remaining);
+              break;
+            }
+          }
+          if (!handshakeDone) return;
+
+          // Handshake OK — send speech.config and SSML
+          _wsSendText(socket,
+            'X-Timestamp:$now\r\n'
+            'Content-Type:application/json; charset=utf-8\r\n'
+            'Path:speech.config\r\n\r\n'
+            '{"context":{"synthesis":{"audio":{"metadataoptions":{'
+            '"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
+            '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}',
+          );
+          final ssml =
+              "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+              "xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>"
+              "<voice name='$voice'>"
+              "<prosody rate='$rateStr'>$escapedText</prosody>"
+              '</voice></speak>';
+          _wsSendText(socket,
+            'X-RequestId:$requestId\r\n'
+            'Content-Type:application/ssml+xml\r\n'
+            'X-Timestamp:$now\r\n'
+            'Path:ssml\r\n\r\n'
+            '$ssml',
+          );
+        }
+
+        // Parse WebSocket frames
+        while (buf.length >= 2) {
+          final b0 = buf[0];
+          final b1 = buf[1];
+          final opcode = b0 & 0x0F;
+          final rsv1 = (b0 & 0x40) != 0; // permessage-deflate compressed
+          final isMasked = (b1 & 0x80) != 0;
+          int payloadLen = b1 & 0x7F;
+          int headerLen = 2 + (isMasked ? 4 : 0);
+          if (payloadLen == 126) {
+            if (buf.length < 4) break;
+            payloadLen = (buf[2] << 8) | buf[3];
+            headerLen += 2;
+          } else if (payloadLen == 127) {
+            if (buf.length < 10) break;
+            payloadLen = 0;
+            for (int i = 2; i < 10; i++) payloadLen = (payloadLen << 8) | buf[i];
+            headerLen += 8;
+          }
+          if (buf.length < headerLen + payloadLen) break;
+
+          List<int> payload = buf.sublist(headerLen, headerLen + payloadLen);
+          buf.removeRange(0, headerLen + payloadLen);
+
+          // Decompress if RSV1 bit set (permessage-deflate)
+          if (rsv1 && payload.isNotEmpty) {
+            // Append 4-byte tail required by deflate spec
+            final deflated = [...payload, 0x00, 0x00, 0xFF, 0xFF];
+            try {
+              payload = ZLibDecoder(raw: true).convert(deflated);
+            } catch (_) {
+              // If decompression fails, use raw payload
+            }
+          }
+
+          if (opcode == 0x01) {
+            final text = utf8.decode(payload, allowMalformed: true);
+            if (text.contains('Path:turn.end')) {
+              timer.cancel();
+              completer.complete(audioData.isNotEmpty ? audioData : null);
+              return;
+            }
+          } else if (opcode == 0x02) {
+            // Binary frame format: 2-byte big-endian uint16 = text header length,
+            // then text header bytes, then MP3 audio data
+            if (payload.length > 2) {
+              final headerLen = (payload[0] << 8) | payload[1];
+              final audioStart = 2 + headerLen;
+              if (audioStart < payload.length) {
+                audioData.addAll(payload.sublist(audioStart));
+              }
+            }
+          } else if (opcode == 0x08) {
+            timer.cancel();
+            completer.complete(audioData.isNotEmpty ? audioData : null);
+            return;
+          } else if (opcode == 0x09) {
+            // Ping — send pong
+            socket.add([0x8A, 0x80, 0x00, 0x00, 0x00, 0x00]);
+          }
+        }
+      },
+      onError: (e) {
+        timer.cancel();
+        if (!completer.isCompleted) completer.completeError(e);
+      },
+      onDone: () {
+        timer.cancel();
+        if (!completer.isCompleted) {
+          completer.complete(audioData.isNotEmpty ? audioData : null);
+        }
+      },
+    );
+
+    return await completer.future;
+  }
+
   static String _generateRequestId() {
-    final rand = DateTime.now().microsecondsSinceEpoch;
-    final hex = rand.toRadixString(16).padLeft(16, '0');
-    // Return 32-char hex string
-    return (hex + hex).substring(0, 32).toUpperCase();
+    // uuid4 hex — 32 lowercase hex chars, no dashes
+    final r = DateTime.now().microsecondsSinceEpoch;
+    final a = r.toRadixString(16).padLeft(16, '0');
+    final b = (r ^ 0xdeadbeefcafe).toRadixString(16).padLeft(16, '0');
+    return (a + b).substring(0, 32);
+  }
+
+  // Generate Sec-MS-GEC token (SHA256 of Windows ticks rounded to 5min + token)
+  static String _generateSecMsGec(String trustedToken) {
+    const winEpoch = 11644473600; // seconds from 1601-01-01 to 1970-01-01
+    final unixSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final ticks = ((unixSec + winEpoch) ~/ 300) * 300 * 10000000;
+    final strToHash = '${ticks.toInt()}$trustedToken';
+    final digest = sha256.convert(ascii.encode(strToHash));
+    return digest.toString().toUpperCase();
+  }
+
+  // Generate random 32-char uppercase hex for Cookie muid
+  static String _generateMuid() {
+    final t = DateTime.now().microsecondsSinceEpoch;
+    final a = t.toRadixString(16).padLeft(16, '0').toUpperCase();
+    final b = (t ^ 0xfeedf00dbaad).toRadixString(16).padLeft(16, '0').toUpperCase();
+    return (a + b).substring(0, 32);
   }
 
   static String _edgeTtsTimestamp() {
