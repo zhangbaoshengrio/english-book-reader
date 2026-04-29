@@ -692,10 +692,14 @@ class VoiceEngineService {
 
   // ── Edge TTS (Microsoft Edge WebSocket, free) ─────────────────────────────
 
+  static bool _hasChinese(String text) =>
+      text.runes.any((r) => r >= 0x4E00 && r <= 0x9FFF);
+
   static Future<List<int>?> _edgeTts(String text, VoiceEngine engine) async {
-    final voice = engine.voiceParam.isNotEmpty
-        ? engine.voiceParam
-        : 'en-US-AriaNeural';
+    // If text contains Chinese characters, use a bilingual voice automatically
+    final voice = _hasChinese(text)
+        ? 'zh-CN-XiaoxiaoNeural'
+        : (engine.voiceParam.isNotEmpty ? engine.voiceParam : 'en-US-AriaNeural');
 
     final speedOffset = ((engine.speed - 1.0) * 100).round();
     final rateStr = speedOffset >= 0 ? '+$speedOffset%' : '$speedOffset%';

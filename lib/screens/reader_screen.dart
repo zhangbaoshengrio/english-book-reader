@@ -866,33 +866,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
         final bottomInset = MediaQuery.of(context).viewPadding.bottom;
         const topPad = 20.0;
         final bottomPad = 16.0 + bottomInset;
-        return LayoutBuilder(
-          builder: (ctx, constraints) {
-            final maxH = constraints.maxHeight - topPad - bottomPad;
-            return Padding(
-              padding: EdgeInsets.fromLTRB(_margin, topPad, _margin, bottomPad),
-              child: ClipRect(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: maxH),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Combine all paragraphs on this page into one TextField
-                      // so the user can freely select across multiple sentences.
-                      _buildParaWidget(
-                        key: _paraKeys.putIfAbsent(
-                            pageIdx * 10000,
-                            () => GlobalKey<_ReaderParagraphState>()),
-                        text: paras.join('\n\n'),
-                        paraKey: pageIdx * 10000,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
+        return Padding(
+          padding: EdgeInsets.fromLTRB(_margin, topPad, _margin, bottomPad),
+          child: SingleChildScrollView(
+            child: _buildParaWidget(
+              key: _paraKeys.putIfAbsent(
+                  pageIdx * 10000,
+                  () => GlobalKey<_ReaderParagraphState>()),
+              text: paras.join('\n\n'),
+              paraKey: pageIdx * 10000,
+            ),
+          ),
         );
       },
     );

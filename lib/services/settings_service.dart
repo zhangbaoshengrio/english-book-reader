@@ -102,7 +102,7 @@ class SettingsService {
   // ── Page turn style ───────────────────────────────────────────────────────
   static Future<String> getPageTurnStyle() async {
     final p = await SharedPreferences.getInstance();
-    return p.getString(_pageTurnStyleKey) ?? PageTurnStyle.swipe;
+    return p.getString(_pageTurnStyleKey) ?? PageTurnStyle.scroll;
   }
   static Future<void> setPageTurnStyle(String v) async {
     final p = await SharedPreferences.getInstance();
