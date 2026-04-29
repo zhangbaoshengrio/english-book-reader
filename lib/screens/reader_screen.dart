@@ -83,8 +83,94 @@ class _ReaderScreenState extends State<ReaderScreen> {
         : AppTheme.textPrimary;
   }
 
-  int get _totalPages => BookParser.pageCount(widget.paragraphs.length);
-  List<String> get _curParas => BookParser.getPage(widget.paragraphs, _page);
+  // ── Dynamic pagination for swipe mode ────────────────────────────────────
+  // Computed lazily when swipe mode is active and layout size is known.
+  List<List<String>> _swipePages = [];
+  double _swipePagesForHeight = -1;
+  double _swipePagesForWidth  = -1;
+  double _swipePagesForFontSize   = -1;
+  double _swipePagesForLineHeight = -1;
+
+  int get _totalPages => _pageTurnStyle == PageTurnStyle.swipe && _swipePages.isNotEmpty
+      ? _swipePages.length
+      : BookParser.pageCount(widget.paragraphs.length);
+
+  List<String> get _curParas => _pageTurnStyle == PageTurnStyle.swipe && _swipePages.isNotEmpty
+      ? (_page < _swipePages.length ? _swipePages[_page] : [])
+      : BookParser.getPage(widget.paragraphs, _page);
+
+  /// Compute dynamic page list by measuring each paragraph with TextPainter.
+  /// Returns the new pages; does NOT call setState.
+  List<List<String>> _computeSwipePages(double pageHeight, double pageWidth) {
+    const double paraSpacing = 24.0; // matches Padding(bottom: 24) in _buildParaWidget
+
+    final pages = <List<String>>[];
+    var currentPage = <String>[];
+    var usedHeight = 0.0;
+
+    for (final para in widget.paragraphs) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: para,
+          style: TextStyle(
+            fontSize: _fontSize,
+            height: _lineHeight,
+            fontFamily: _fontFamily,
+            letterSpacing: 0.15,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: pageWidth);
+
+      final paraHeight = tp.height + paraSpacing;
+
+      if (currentPage.isEmpty) {
+        currentPage.add(para);
+        usedHeight = paraHeight;
+      } else if (usedHeight + paraHeight <= pageHeight) {
+        currentPage.add(para);
+        usedHeight += paraHeight;
+      } else {
+        pages.add(currentPage);
+        currentPage = [para];
+        usedHeight = paraHeight;
+      }
+    }
+    if (currentPage.isNotEmpty) pages.add(currentPage);
+    return pages;
+  }
+
+  /// Called from LayoutBuilder — computes pages if layout/font changed,
+  /// then schedules setState if the result differs.
+  void _maybeRebuildSwipePages(double pageHeight, double pageWidth) {
+    if (_swipePagesForHeight    == pageHeight &&
+        _swipePagesForWidth     == pageWidth  &&
+        _swipePagesForFontSize   == _fontSize   &&
+        _swipePagesForLineHeight == _lineHeight) return;
+
+    final newPages = _computeSwipePages(pageHeight, pageWidth);
+
+    _swipePagesForHeight     = pageHeight;
+    _swipePagesForWidth      = pageWidth;
+    _swipePagesForFontSize   = _fontSize;
+    _swipePagesForLineHeight = _lineHeight;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _swipePages = newPages;
+        if (_page >= newPages.length) {
+          _page = (newPages.length - 1).clamp(0, newPages.length - 1);
+        }
+      });
+      // Jump PageController to correct page after rebuild
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pageCtrl.hasClients && _pageCtrl.page?.round() != _page) {
+          _pageCtrl.jumpToPage(_page);
+        }
+      });
+    });
+  }
 
   @override
   void initState() {
@@ -122,6 +208,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _margin        = results[5] as double;
       _pageTurnStyle = style;
       _autoTranslate = results[8] as bool;
+      // Invalidate swipe page cache so it's recomputed with new settings
+      _swipePagesForHeight = -1;
     });
     // Restore scroll position in continuous scroll mode.
     if (style == PageTurnStyle.scroll) {
@@ -852,23 +940,35 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // ── Swipe mode ────────────────────────────────────────────────────────────
   Widget _buildSwipeContent() {
-    return PageView.builder(
-      controller: _pageCtrl,
-      itemCount: _totalPages,
-      onPageChanged: (idx) {
-        _removeOverlay();
-        _paraKeys.clear();
-        setState(() => _page = idx);
-        _saveProgress();
-      },
-      itemBuilder: (ctx, pageIdx) {
-        final paras = BookParser.getPage(widget.paragraphs, pageIdx);
-        final bottomInset = MediaQuery.of(context).viewPadding.bottom;
-        const topPad = 20.0;
-        final bottomPad = 16.0 + bottomInset;
-        return Padding(
-          padding: EdgeInsets.fromLTRB(_margin, topPad, _margin, bottomPad),
-          child: SingleChildScrollView(
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
+    const topPad = 20.0;
+    final bottomPad = 16.0 + bottomInset;
+
+    return LayoutBuilder(builder: (ctx, constraints) {
+      final pageWidth  = constraints.maxWidth  - _margin * 2;
+      final pageHeight = constraints.maxHeight - topPad - bottomPad;
+
+      // Schedule rebuild if size or font settings changed.
+      _maybeRebuildSwipePages(pageHeight, pageWidth);
+
+      if (_swipePages.isEmpty) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      return PageView.builder(
+        controller: _pageCtrl,
+        itemCount: _totalPages,
+        onPageChanged: (idx) {
+          _removeOverlay();
+          _paraKeys.clear();
+          setState(() => _page = idx);
+          _saveProgress();
+        },
+        itemBuilder: (ctx, pageIdx) {
+          if (pageIdx >= _swipePages.length) return const SizedBox.shrink();
+          final paras = _swipePages[pageIdx];
+          return Padding(
+            padding: EdgeInsets.fromLTRB(_margin, topPad, _margin, bottomPad),
             child: _buildParaWidget(
               key: _paraKeys.putIfAbsent(
                   pageIdx * 10000,
@@ -876,10 +976,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
               text: paras.join('\n\n'),
               paraKey: pageIdx * 10000,
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+    });
   }
 
   // ── Shared paragraph builder ──────────────────────────────────────────────
