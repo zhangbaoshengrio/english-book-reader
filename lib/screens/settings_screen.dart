@@ -118,7 +118,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SliderRow(
               label: '行间距',
               value: _lineHeight,
-              min: 1.4, max: 2.4, divisions: 10,
+              min: 1.2, max: 2.8, divisions: 16,
               display: _lineHeight.toStringAsFixed(1),
               onChanged: (v) => setState(() => _lineHeight = v),
               onChangeEnd: (v) => SettingsService.setLineHeight(v),
@@ -128,7 +128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _SliderRow(
               label: '页面边距',
               value: _margin,
-              min: 8, max: 40, divisions: 8,
+              min: 4, max: 56, divisions: 13,
               display: '${_margin.round()}px',
               onChanged: (v) => setState(() => _margin = v),
               onChangeEnd: (v) => SettingsService.setMargin(v),

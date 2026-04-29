@@ -261,27 +261,56 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (mounted) setState(() { _bookmarks = bm; _readerNotes = notes; });
   }
 
-  Future<void> _addBookmark() async {
+  Future<void> _toggleBookmark() async {
     final bookId = widget.book.id;
     if (bookId == null) return;
-    final paras = BookParser.getPage(widget.paragraphs, _page);
-    final snippet = paras.isNotEmpty
-        ? paras.first.substring(0, paras.first.length.clamp(0, 80))
-        : 'Page ${_page + 1}';
-    await DatabaseService.addBookmark(Bookmark(
-      bookId: bookId, page: _page,
-      snippet: snippet, createdAt: DateTime.now(),
-    ));
-    await _refreshBookmarksAndNotes();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('书签已添加'),
-          duration: const Duration(seconds: 1),
-          backgroundColor: AppTheme.primary,
-        ),
-      );
+
+    // Check if current page already has a bookmark
+    final existing = _bookmarks.where((b) => b.page == _page).toList();
+    final isAdding = existing.isEmpty;
+
+    if (isAdding) {
+      final paras = _pageTurnStyle == PageTurnStyle.swipe && _swipePages.isNotEmpty
+          ? (_page < _swipePages.length ? _swipePages[_page] : <String>[])
+          : BookParser.getPage(widget.paragraphs, _page);
+      final snippet = paras.isNotEmpty
+          ? paras.first.substring(0, paras.first.length.clamp(0, 80))
+          : 'Page ${_page + 1}';
+      await DatabaseService.addBookmark(Bookmark(
+        bookId: bookId, page: _page,
+        snippet: snippet, createdAt: DateTime.now(),
+      ));
+    } else {
+      for (final bm in existing) {
+        if (bm.id != null) await DatabaseService.deleteBookmark(bm.id!);
+      }
     }
+
+    await _refreshBookmarksAndNotes();
+    if (!mounted) return;
+
+    // Animated top banner
+    _showBookmarkBanner(isAdding);
+  }
+
+  OverlayEntry? _bookmarkBannerEntry;
+
+  void _showBookmarkBanner(bool added) {
+    _bookmarkBannerEntry?.remove();
+    _bookmarkBannerEntry = null;
+
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(builder: (_) => _BookmarkBanner(added: added));
+    _bookmarkBannerEntry = entry;
+    overlay.insert(entry);
+
+    Future.delayed(const Duration(milliseconds: 1800), () {
+      if (entry.mounted) {
+        entry.remove();
+        if (_bookmarkBannerEntry == entry) _bookmarkBannerEntry = null;
+      }
+    });
   }
 
   Future<void> _refreshSources() async {
@@ -909,7 +938,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         behavior: HitTestBehavior.translucent,
         onVerticalDragEnd: (d) {
           final v = d.primaryVelocity ?? 0;
-          if (v > 700) _addBookmark();        // 下拉 → 书签
+          if (v > 700) _toggleBookmark();      // 下拉 → 添加/取消书签
           else if (v < -700) Navigator.of(context).pop(); // 上拉 → 关闭
         },
         child: _pageTurnStyle == PageTurnStyle.swipe
@@ -2224,6 +2253,87 @@ class _NavBtn extends StatelessWidget {
         children: children.map((w) => w is Text
             ? Text(w.data!, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: color))
             : (w is Icon ? Icon(w.icon, size: w.size, color: color) : w)).toList(),
+      ),
+    );
+  }
+}
+
+// ── Bookmark banner (slides in from top) ─────────────────────────────────────
+
+class _BookmarkBanner extends StatefulWidget {
+  final bool added;
+  const _BookmarkBanner({required this.added});
+
+  @override
+  State<_BookmarkBanner> createState() => _BookmarkBannerState();
+}
+
+class _BookmarkBannerState extends State<_BookmarkBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<Offset> _slide;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    _slide = Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _ctrl.forward();
+
+    // Slide out before removal
+    Future.delayed(const Duration(milliseconds: 1300), () {
+      if (mounted) _ctrl.reverse();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final topPad = MediaQuery.of(context).viewPadding.top;
+    final icon = widget.added ? Icons.bookmark_added_rounded : Icons.bookmark_remove_rounded;
+    final label = widget.added ? '书签已添加' : '书签已取消';
+    final color = widget.added ? AppTheme.primary : const Color(0xFFFF6B6B);
+
+    return Positioned(
+      top: topPad + 8,
+      left: 24,
+      right: 24,
+      child: SlideTransition(
+        position: _slide,
+        child: FadeTransition(
+          opacity: _fade,
+          child: Material(
+            elevation: 6,
+            borderRadius: BorderRadius.circular(12),
+            color: color,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Text(label,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
