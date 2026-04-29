@@ -124,10 +124,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
       final paraHeight = tp.height + paraSpacing;
 
+      // Safety margin: reserve one extra line height to compensate for
+      // sub-pixel rounding differences between TextPainter and actual render.
+      final safePageHeight = pageHeight - _fontSize * _lineHeight;
+
       if (currentPage.isEmpty) {
         currentPage.add(para);
         usedHeight = paraHeight;
-      } else if (usedHeight + paraHeight <= pageHeight) {
+      } else if (usedHeight + paraHeight <= safePageHeight) {
         currentPage.add(para);
         usedHeight += paraHeight;
       } else {

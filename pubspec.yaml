@@ -1,7 +1,7 @@
 name: english_reader
 description: English Book Reader with Vocabulary Builder
 publish_to: 'none'
-version: 1.11.12+1
+version: 1.11.13+1
 
 environment:
   sdk: ^3.11.1
