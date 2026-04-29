@@ -695,11 +695,56 @@ class VoiceEngineService {
   static bool _hasChinese(String text) =>
       text.runes.any((r) => r >= 0x4E00 && r <= 0x9FFF);
 
+  /// Split text into segments: each segment is (isChinese, content).
+  /// Chinese = CJK characters; non-Chinese = everything else (English, punctuation, spaces).
+  static List<(bool, String)> _splitByLanguage(String text) {
+    final segments = <(bool, String)>[];
+    if (text.isEmpty) return segments;
+    final buf = StringBuffer();
+    bool lastChinese = text.runes.first >= 0x4E00 && text.runes.first <= 0x9FFF;
+    for (final rune in text.runes) {
+      final isChinese = rune >= 0x4E00 && rune <= 0x9FFF;
+      if (isChinese != lastChinese) {
+        final s = buf.toString().trim();
+        if (s.isNotEmpty) segments.add((lastChinese, s));
+        buf.clear();
+        lastChinese = isChinese;
+      }
+      buf.writeCharCode(rune);
+    }
+    final s = buf.toString().trim();
+    if (s.isNotEmpty) segments.add((lastChinese, s));
+    return segments;
+  }
+
+  /// Build SSML for mixed Chinese/English text using per-segment <voice> tags.
+  static String _buildMixedSsml(String text, String enVoice, String rateStr) {
+    final segments = _splitByLanguage(text);
+    // If no Chinese, use simple single-voice SSML
+    if (!segments.any((s) => s.$1)) {
+      return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+          "xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>"
+          "<voice name='$enVoice'>"
+          "<prosody rate='$rateStr'>${escapedFor(text)}</prosody>"
+          '</voice></speak>';
+    }
+    final sb = StringBuffer();
+    sb.write("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+        "xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='zh-CN'>");
+    for (final seg in segments) {
+      final isChinese = seg.$1;
+      final content = escapedFor(seg.$2);
+      final voice = isChinese ? 'zh-CN-XiaoxiaoNeural' : enVoice;
+      sb.write("<voice name='$voice'>"
+          "<prosody rate='$rateStr'>$content</prosody>"
+          '</voice>');
+    }
+    sb.write('</speak>');
+    return sb.toString();
+  }
+
   static Future<List<int>?> _edgeTts(String text, VoiceEngine engine) async {
-    // If text contains Chinese characters, use a bilingual voice automatically
-    final voice = _hasChinese(text)
-        ? 'zh-CN-XiaoxiaoNeural'
-        : (engine.voiceParam.isNotEmpty ? engine.voiceParam : 'en-US-AriaNeural');
+    final enVoice = engine.voiceParam.isNotEmpty ? engine.voiceParam : 'en-US-AriaNeural';
 
     final speedOffset = ((engine.speed - 1.0) * 100).round();
     final rateStr = speedOffset >= 0 ? '+$speedOffset%' : '$speedOffset%';
@@ -754,9 +799,11 @@ class VoiceEngineService {
           '\r\n';
       socket.add(utf8.encode(handshake));
 
+      // Build SSML — mixed Chinese/English uses per-segment <voice> tags
+      final ssml = _buildMixedSsml(text, enVoice, rateStr);
+
       // Use a single listen over the entire session (header + audio)
-      return await _edgeTtsSession(
-          socket, requestId, now, voice, rateStr, escapedFor(text));
+      return await _edgeTtsSession(socket, requestId, now, ssml);
     } catch (e) {
       throw Exception('Edge TTS 连接失败: $e');
     } finally {
@@ -799,9 +846,7 @@ class VoiceEngineService {
     SecureSocket socket,
     String requestId,
     String now,
-    String voice,
-    String rateStr,
-    String escapedText,
+    String ssml,
   ) async {
     final completer = Completer<List<int>?>();
     final buf = <int>[];
@@ -852,12 +897,6 @@ class VoiceEngineService {
             '"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
             '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}',
           );
-          final ssml =
-              "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
-              "xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'>"
-              "<voice name='$voice'>"
-              "<prosody rate='$rateStr'>$escapedText</prosody>"
-              '</voice></speak>';
           _wsSendText(socket,
             'X-RequestId:$requestId\r\n'
             'Content-Type:application/ssml+xml\r\n'
