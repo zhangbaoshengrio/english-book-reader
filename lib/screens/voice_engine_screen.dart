@@ -243,8 +243,29 @@ class _VoiceEngineScreenState extends State<VoiceEngineScreen> {
     if (_aiTesting) return;
     setState(() => _aiTesting = true);
     try {
-      await TtsService.speakAi('Hello, this is a test. 这是一个测试。');
-    } catch (_) {}
+      final engine = await VoiceEngineService.getAiEngine();
+      if (engine == null) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未找到引擎'), duration: Duration(seconds: 3)),
+        );
+      } else if (engine.type == VoiceEngineType.builtinTts) {
+        // 系统内置引擎直接用 flutter_tts，无需网络测试
+      } else {
+        final bytes = await VoiceEngineService.fetchAudio(
+            'Hello, this is a test.', engine);
+        if (bytes == null || bytes.isEmpty) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('引擎无响应'), duration: Duration(seconds: 3)),
+          );
+        } else {
+          await TtsService.playBytes(bytes);
+        }
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('测试失败：$e'), duration: const Duration(seconds: 3)),
+      );
+    }
     if (mounted) setState(() => _aiTesting = false);
   }
 

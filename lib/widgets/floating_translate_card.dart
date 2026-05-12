@@ -82,7 +82,7 @@ class _FloatingTranslateCardState extends State<FloatingTranslateCard> {
         setState(() => _results[engineId] = '');
       } else if (mounted && accumulated.isNotEmpty) {
         final autoSpeak = await VoiceEngineService.getAiAutoSpeak();
-        if (autoSpeak && mounted) TtsService.speakAi(_AiResultBlockState._stripMd(accumulated));
+        if (autoSpeak && mounted) TtsService.speakAi(_AiResultBlockState._stripMd(accumulated)).catchError((_) {});
       }
     } else {
       final result =
@@ -421,7 +421,18 @@ class _AiResultBlockState extends State<_AiResultBlock> {
       if (mounted) setState(() => _speaking = false);
     } else {
       setState(() => _speaking = true);
-      await TtsService.speakAi(_stripMd(widget.analysis!));
+      try {
+        await TtsService.speakAi(_stripMd(widget.analysis!));
+      } catch (e) {
+        print('[TTS] speakAi translate error: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('朗读失败: $e'),
+            backgroundColor: Colors.red.shade700,
+            duration: const Duration(seconds: 6),
+          ));
+        }
+      }
       if (mounted) setState(() => _speaking = false);
     }
   }

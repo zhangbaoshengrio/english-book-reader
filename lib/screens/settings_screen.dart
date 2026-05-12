@@ -1,6 +1,7 @@
 import 'dart:io' as io;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/database_service.dart';
@@ -27,11 +28,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _theme         = ReaderTheme.paper;
   String _fontFamily    = 'Georgia';
   String _pageTurnStyle = PageTurnStyle.scroll;
+  String _appVersion    = '';
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) setState(() => _appVersion = info.version);
   }
 
 
@@ -229,10 +237,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // ── 关于 ─────────────────────────────────────────────────────────────
           _SectionHeader('关于'),
           _Card(children: [
-            const ListTile(
-              leading: Icon(Icons.auto_stories_rounded, color: AppTheme.primary, size: 22),
-              title: Text('English Book Reader', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-              subtitle: Text('专注英文阅读的词典 & 词汇工具', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            ListTile(
+              leading: const Icon(Icons.auto_stories_rounded, color: AppTheme.primary, size: 22),
+              title: const Text('English Book Reader', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                _appVersion.isEmpty
+                    ? '专注英文阅读的词典 & 词汇工具'
+                    : '专注英文阅读的词典 & 词汇工具  v$_appVersion',
+                style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+              ),
             ),
           ]),
 

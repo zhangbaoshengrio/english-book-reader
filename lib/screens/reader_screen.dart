@@ -54,6 +54,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // Track which paragraph owns the current word selection
   int _selectedParaIdx = -1;
 
+  // Search highlight (temporary after jumping from search results)
+  String? _searchHighlight;
+
   // Bookmarks & notes
   List<Bookmark>   _bookmarks = [];
   List<ReaderNote> _readerNotes = [];
@@ -102,11 +105,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// Compute dynamic page list by measuring each paragraph with TextPainter.
   /// Returns the new pages; does NOT call setState.
   List<List<String>> _computeSwipePages(double pageHeight, double pageWidth) {
-    const double paraSpacing = 24.0; // matches Padding(bottom: 24) in _buildParaWidget
+    // In swipe mode all paragraphs on a page are joined with '\n\n' inside a
+    // single TextField (see paras.join('\n\n') in _buildSwipeContent).
+    // Each '\n' in a TextField with TextStyle(height: lineHeight) renders as
+    // fontSize * lineHeight tall, so '\n\n' = 2 * fontSize * lineHeight.
+    final double paraGap = _fontSize * _lineHeight * 2;
+    // Bottom Padding(bottom: 24) wraps the whole _buildParaWidget per page.
+    const double bottomPad = 24.0;
+    // 1 line-height safety margin for Google Fonts vs TextPainter metric drift.
+    final double safetyMargin = _fontSize * _lineHeight;
 
     final pages = <List<String>>[];
     var currentPage = <String>[];
-    var usedHeight = 0.0;
+    var usedHeight = 0.0; // rendered height excluding bottomPad
 
     for (final para in widget.paragraphs) {
       final tp = TextPainter(
@@ -122,22 +133,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: pageWidth);
 
-      final paraHeight = tp.height + paraSpacing;
-
-      // Safety margin: 2 line-heights + 24px fixed to cover font metric
-      // differences between TextPainter measurement and actual Google Fonts render.
-      final safePageHeight = pageHeight - _fontSize * _lineHeight * 2 - 24;
+      final paraH = tp.height;
 
       if (currentPage.isEmpty) {
         currentPage.add(para);
-        usedHeight = paraHeight;
-      } else if (usedHeight + paraHeight <= safePageHeight) {
-        currentPage.add(para);
-        usedHeight += paraHeight;
+        usedHeight = paraH;
       } else {
-        pages.add(currentPage);
-        currentPage = [para];
-        usedHeight = paraHeight;
+        final wouldBe = usedHeight + paraGap + paraH;
+        if (wouldBe + bottomPad + safetyMargin <= pageHeight) {
+          currentPage.add(para);
+          usedHeight = wouldBe;
+        } else {
+          pages.add(currentPage);
+          currentPage = [para];
+          usedHeight = paraH;
+        }
       }
     }
     if (currentPage.isNotEmpty) pages.add(currentPage);
@@ -362,6 +372,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // ── Word lookup overlay ────────────────────────────────────────────────────
 
   Future<void> _onWordTap(String word, String paraText, int paraIdx) async {
+    _clearSearchHighlight();
     final sentence = BookParser.extractSentence(paraText, word);
     final hitKey = '${word}_${DateTime.now().millisecondsSinceEpoch}';
 
@@ -440,6 +451,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   void _showTranslateOverlay(String text, {String paraText = ''}) {
     if (text.trim().isEmpty) return;
+    _clearSearchHighlight();
     _removeOverlayOnly(); // don't clear paragraph selections
     _translateText = text.trim();
     _translateParaText = paraText;
@@ -808,9 +820,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => _SearchPanel(
         paragraphs: widget.paragraphs,
-        onJumpToPage: (page) {
+        onJumpToPage: (page, query) {
           Navigator.pop(ctx);
           _goToPage(page);
+          _setSearchHighlight(query);
         },
       ),
     );
@@ -878,6 +891,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
       setState(() => _page = target);
       _scroll.animateTo(0, duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
       _saveProgress();
+    }
+  }
+
+  void _setSearchHighlight(String query) {
+    setState(() => _searchHighlight = query.isEmpty ? null : query);
+  }
+
+  void _clearSearchHighlight() {
+    if (_searchHighlight != null) {
+      setState(() => _searchHighlight = null);
     }
   }
 
@@ -1027,6 +1050,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         key: key,
         text: text,
         vocabSet: _vocabSet,
+        searchHighlight: _searchHighlight,
         fontSize: _fontSize,
         lineHeight: _lineHeight,
         textColor: _textColor,
@@ -1042,7 +1066,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         },
         onSelectionAction: (action, selectedText) =>
             _onSelectionAction(action, selectedText),
-        onTapOutside: () {},
+        onTapOutside: _clearSearchHighlight,
       ),
     );
   }
@@ -1053,13 +1077,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
 class _VocabTextController extends TextEditingController {
   Set<String> vocabSet;
   Color textColor;
+  String? searchHighlight;
   static final _wordRe = RegExp(r"\b[a-zA-Z]+(?:'[a-zA-Z]+)?\b");
   static const _hlColor = Color(0x55D4A017);
+  static const _searchHlColor = Color(0x55007AFF);
 
   _VocabTextController({
     required String text,
     required this.vocabSet,
     required this.textColor,
+    this.searchHighlight,
   }) : super(text: text);
 
   @override
@@ -1085,10 +1112,6 @@ class _VocabTextController extends TextEditingController {
       }
     }
 
-    // Helper: is position [pos] inside any phrase range?
-    bool inPhrase(int pos) =>
-        phraseRanges.any((r) => pos >= r.$1 && pos < r.$2);
-
     final spans = <InlineSpan>[];
     var last = 0;
 
@@ -1107,29 +1130,78 @@ class _VocabTextController extends TextEditingController {
       for (final m in wordMatches) (m.start, m.end, false),
     ]..sort((a, b) => a.$1.compareTo(b.$1));
 
+    // 3. Collect search highlight ranges.
+    final searchRanges = <(int, int)>[];
+    if (searchHighlight != null && searchHighlight!.isNotEmpty) {
+      final lowerQ = searchHighlight!.toLowerCase();
+      var si = lower.indexOf(lowerQ);
+      while (si >= 0) {
+        searchRanges.add((si, si + lowerQ.length));
+        si = lower.indexOf(lowerQ, si + lowerQ.length);
+      }
+    }
+    bool inSearchRange(int pos) =>
+        searchRanges.any((r) => pos >= r.$1 && pos < r.$2);
+
     for (final (start, end, isPhrase) in events) {
       if (start < last) continue; // overlapping — skip
       if (start > last) {
-        spans.add(TextSpan(text: text.substring(last, start), style: base));
+        // Gap text — may still contain search highlights
+        _addSpansWithSearchHL(spans, text.substring(last, start), last, base, searchRanges);
       }
       final chunk = text.substring(start, end);
-      final highlighted = isPhrase
+      final vocabHL = isPhrase
           ? true
           : vocabSet.contains(chunk.toLowerCase());
+      final searchHL = inSearchRange(start);
       spans.add(TextSpan(
         text: chunk,
         style: base.copyWith(
           decoration: TextDecoration.none,
-          backgroundColor: highlighted ? _hlColor : null,
+          backgroundColor: searchHL ? _searchHlColor : (vocabHL ? _hlColor : null),
         ),
       ));
       last = end;
     }
 
     if (last < text.length) {
-      spans.add(TextSpan(text: text.substring(last), style: base));
+      _addSpansWithSearchHL(spans, text.substring(last), last, base, searchRanges);
     }
     return TextSpan(children: spans);
+  }
+
+  /// Splits [segment] into sub-spans, highlighting portions that fall within [searchRanges].
+  /// [offset] is the absolute position of [segment] within the full text.
+  void _addSpansWithSearchHL(
+    List<InlineSpan> spans,
+    String segment,
+    int offset,
+    TextStyle base,
+    List<(int, int)> searchRanges,
+  ) {
+    if (searchRanges.isEmpty) {
+      spans.add(TextSpan(text: segment, style: base));
+      return;
+    }
+    var pos = 0;
+    for (final (rs, re) in searchRanges) {
+      final localStart = rs - offset;
+      final localEnd   = re - offset;
+      if (localEnd <= 0 || localStart >= segment.length) continue;
+      final s = localStart.clamp(0, segment.length);
+      final e = localEnd.clamp(0, segment.length);
+      if (s > pos) {
+        spans.add(TextSpan(text: segment.substring(pos, s), style: base));
+      }
+      spans.add(TextSpan(
+        text: segment.substring(s, e),
+        style: base.copyWith(backgroundColor: _searchHlColor),
+      ));
+      pos = e;
+    }
+    if (pos < segment.length) {
+      spans.add(TextSpan(text: segment.substring(pos), style: base));
+    }
   }
 }
 
@@ -1140,6 +1212,7 @@ enum _SelectionAction { copy, search, highlight, note, share }
 class _ReaderParagraph extends StatefulWidget {
   final String text;
   final Set<String> vocabSet;
+  final String? searchHighlight;
   final double fontSize;
   final double lineHeight;
   final Color textColor;
@@ -1154,6 +1227,7 @@ class _ReaderParagraph extends StatefulWidget {
     super.key,
     required this.text,
     required this.vocabSet,
+    this.searchHighlight,
     required this.fontSize,
     required this.lineHeight,
     required this.textColor,
@@ -1270,11 +1344,13 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
   void didUpdateWidget(_ReaderParagraph old) {
     super.didUpdateWidget(old);
     if (old.text != widget.text || old.vocabSet != widget.vocabSet ||
-        old.textColor != widget.textColor || old.fontSize != widget.fontSize) {
+        old.textColor != widget.textColor || old.fontSize != widget.fontSize ||
+        old.searchHighlight != widget.searchHighlight) {
       _wordRanges = _buildWordRanges(widget.text);
       (_ctrl as _VocabTextController)
         ..vocabSet = widget.vocabSet
-        ..textColor = widget.textColor;
+        ..textColor = widget.textColor
+        ..searchHighlight = widget.searchHighlight;
       setState(() {}); // force TextField to re-invoke buildTextSpan
     }
   }
@@ -1302,6 +1378,7 @@ class _ReaderParagraphState extends State<_ReaderParagraph> {
       text: widget.text,
       vocabSet: widget.vocabSet,
       textColor: widget.textColor,
+      searchHighlight: widget.searchHighlight,
     );
   }
 
@@ -2033,7 +2110,7 @@ class _TocPanelState extends State<_TocPanel> with SingleTickerProviderStateMixi
 
 class _SearchPanel extends StatefulWidget {
   final List<String> paragraphs;
-  final void Function(int page) onJumpToPage;
+  final void Function(int page, String query) onJumpToPage;
 
   const _SearchPanel({
     required this.paragraphs,
@@ -2165,7 +2242,7 @@ class _SearchPanelState extends State<_SearchPanel> {
                   itemBuilder: (_, i) {
                     final r = _results[i];
                     return InkWell(
-                      onTap: () => widget.onJumpToPage(r.page),
+                      onTap: () => widget.onJumpToPage(r.page, _ctrl.text.trim()),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

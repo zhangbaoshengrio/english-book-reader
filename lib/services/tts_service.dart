@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -8,8 +9,9 @@ class TtsService {
   static final AudioPlayer _player = AudioPlayer();
   static bool _ready = false;
   static double _speed = 0.75;
+  static bool _stopRequested = false;
 
-  // ── Audio cache (in-memory, cleared when engine config changes) ──────────
+  // ── Audio cache ────────────────────────────────────────────────────────────
   static final Map<String, List<int>> _audioCache = {};
   static const _maxCacheEntries = 120;
 
@@ -23,7 +25,6 @@ class TtsService {
     final bytes = await VoiceEngineService.fetchAudio(text, engine);
     if (bytes != null && bytes.isNotEmpty) {
       if (_audioCache.length >= _maxCacheEntries) {
-        // Drop the oldest half when full
         final keys = _audioCache.keys.take(_maxCacheEntries ~/ 2).toList();
         for (final k in keys) _audioCache.remove(k);
       }
@@ -32,7 +33,6 @@ class TtsService {
     return bytes;
   }
 
-  /// Clear cached audio (call after changing engine credentials / voice).
   static void clearCache() => _audioCache.clear();
 
   static Future<void> _init() async {
@@ -46,24 +46,44 @@ class TtsService {
 
   static Future<void> setSpeed(double speed) async {
     _speed = speed;
-    _ready = false; // force re-init with new speed
+    _ready = false;
+  }
+
+  /// Split long text into sentence-level chunks ≤ maxLen chars.
+  static List<String> _splitChunks(String text, {int maxLen = 300}) {
+    if (text.length <= maxLen) return [text];
+    final chunks = <String>[];
+    final sentences = text.split(RegExp(r'(?<=[.!?。！？])\s+'));
+    var buf = '';
+    for (final s in sentences) {
+      if (buf.isEmpty) {
+        buf = s;
+      } else if (buf.length + 1 + s.length <= maxLen) {
+        buf += ' $s';
+      } else {
+        if (buf.isNotEmpty) chunks.add(buf.trim());
+        buf = s;
+      }
+    }
+    if (buf.isNotEmpty) chunks.add(buf.trim());
+    return chunks.where((c) => c.isNotEmpty).toList();
   }
 
   static Future<void> speak(String text) async {
-    // Dispatch to active voice engine
+    _stopRequested = false;
     final engine = await VoiceEngineService.getActiveEngine();
     if (engine != null) {
       if (engine.type == VoiceEngineType.builtinTts) {
-        // Use engine's stored speed
         _speed = engine.speed;
         _ready = false;
       } else {
-        final bytes = await _fetchWithCache(text, engine);
-        if (bytes != null && bytes.isNotEmpty) {
-          await _playBytes(bytes);
-          return;
-        }
-        // Fall through to builtin on failure
+        try {
+          final bytes = await _fetchWithCache(text, engine);
+          if (bytes != null && bytes.isNotEmpty) {
+            await _playBytes(bytes);
+            return;
+          }
+        } catch (_) {}
       }
     }
     await _speakBuiltin(text);
@@ -75,10 +95,11 @@ class TtsService {
     await _tts.speak(text);
   }
 
-  /// Play raw audio bytes directly (for preview use).
   static Future<void> playBytes(List<int> bytes) => _playBytes(bytes);
 
-  static Future<void> _playBytes(List<int> bytes) async {
+  /// Play audio bytes. For single-shot use (non-sequential), fire-and-forget.
+  /// For sequential chunk playback, waits via onPlayerComplete with timeout.
+  static Future<void> _playBytes(List<int> bytes, {bool waitForComplete = false}) async {
     String? path;
     try {
       path = await VoiceEngineService.saveTempAudio(bytes, 'mp3');
@@ -86,12 +107,15 @@ class TtsService {
       await _tts.stop();
       await _player.stop();
       await _player.play(DeviceFileSource(path));
-      // Wait for playback to complete
-      await _player.onPlayerComplete.first;
+      if (waitForComplete) {
+        // Estimate duration from file size: mp3 at 24kbps ≈ 3000 bytes/sec
+        final estimatedMs = ((bytes.length / 3000) * 1000).round().clamp(1000, 120000);
+        await _player.onPlayerComplete.first
+            .timeout(Duration(milliseconds: estimatedMs + 5000));
+      }
     } catch (_) {
-      // ignore playback errors
+      // ignore
     } finally {
-      // Clean up temp file after a delay
       if (path != null) {
         final filePath = path;
         Future.delayed(const Duration(seconds: 30), () {
@@ -101,26 +125,33 @@ class TtsService {
     }
   }
 
-  /// Speak text using the dedicated AI-result voice engine.
+  /// Speak using the AI-result voice engine, split into chunks for long text.
   static Future<void> speakAi(String text) async {
+    _stopRequested = false;
     final engine = await VoiceEngineService.getAiEngine();
-    if (engine != null) {
-      if (engine.type == VoiceEngineType.builtinTts) {
-        _speed = engine.speed;
-        _ready = false;
-      } else {
-        final bytes = await _fetchWithCache(text, engine);
+    if (engine != null && engine.type != VoiceEngineType.builtinTts) {
+      final chunks = _splitChunks(text, maxLen: 300);
+      final isMultiChunk = chunks.length > 1;
+      for (final chunk in chunks) {
+        if (_stopRequested) return;
+        final bytes = await _fetchWithCache(chunk, engine);
+        if (_stopRequested) return;
         if (bytes != null && bytes.isNotEmpty) {
-          await _playBytes(bytes);
-          return;
+          // Wait between chunks so they play sequentially
+          await _playBytes(bytes, waitForComplete: isMultiChunk);
         }
-        // Fall through to builtin on failure
       }
+      return;
+    }
+    if (engine != null) {
+      _speed = engine.speed;
+      _ready = false;
     }
     await _speakBuiltin(text);
   }
 
   static Future<void> stop() async {
+    _stopRequested = true;
     await _tts.stop();
     await _player.stop();
   }

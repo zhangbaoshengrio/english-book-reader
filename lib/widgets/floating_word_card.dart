@@ -96,7 +96,7 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
     } else {
       // Auto-speak AI result if enabled
       final autoSpeak = await VoiceEngineService.getAiAutoSpeak();
-      if (autoSpeak && mounted) TtsService.speakAi(_AiWordPanelState._stripMd(accumulated));
+      if (autoSpeak && mounted) TtsService.speakAi(_AiWordPanelState._stripMd(accumulated)).catchError((_) {});
     }
   }
 
@@ -1098,7 +1098,18 @@ class _AiWordPanelState extends State<_AiWordPanel> {
       if (mounted) setState(() => _speaking = false);
     } else {
       setState(() => _speaking = true);
-      await TtsService.speakAi(_stripMd(widget.result!));
+      try {
+        await TtsService.speakAi(_stripMd(widget.result!));
+      } catch (e) {
+        print('[TTS] speakAi word error: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('朗读失败: $e'),
+            backgroundColor: Colors.red.shade700,
+            duration: const Duration(seconds: 6),
+          ));
+        }
+      }
       if (mounted) setState(() => _speaking = false);
     }
   }
