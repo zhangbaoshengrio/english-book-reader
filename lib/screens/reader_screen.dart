@@ -820,9 +820,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => _SearchPanel(
         paragraphs: widget.paragraphs,
-        onJumpToPage: (page, query) {
+        totalPages: _totalPages,
+        onJump: (paraIdx, query) {
           Navigator.pop(ctx);
-          _goToPage(page);
+          _jumpToParaIdx(paraIdx);
           _setSearchHighlight(query);
         },
       ),
@@ -890,6 +891,41 @@ class _ReaderScreenState extends State<ReaderScreen> {
     } else {
       setState(() => _page = target);
       _scroll.animateTo(0, duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+      _saveProgress();
+    }
+  }
+
+  void _jumpToParaIdx(int paraIdx) {
+    if (_pageTurnStyle == PageTurnStyle.swipe && _swipePages.isNotEmpty) {
+      // Find which swipe page contains this paragraph
+      final paraText = widget.paragraphs[paraIdx];
+      int targetPage = 0;
+      for (var p = 0; p < _swipePages.length; p++) {
+        if (_swipePages[p].contains(paraText)) {
+          targetPage = p;
+          break;
+        }
+      }
+      _goToPage(targetPage);
+    } else {
+      // Scroll mode: compute which group contains this paragraph
+      final groupIdx = paraIdx ~/ _scrollGroupSize;
+      _removeOverlay();
+      _paraKeys.clear();
+      // Estimate scroll offset: each group is roughly similar height.
+      // Use itemScrollController would be better, but we estimate here.
+      final totalGroups = (widget.paragraphs.length + _scrollGroupSize - 1) ~/ _scrollGroupSize;
+      if (totalGroups <= 1) {
+        _scroll.animateTo(0,
+            duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      } else {
+        // Estimate position proportionally
+        final maxScroll = _scroll.position.maxScrollExtent;
+        final target = (groupIdx / totalGroups * maxScroll).clamp(0.0, maxScroll);
+        _scroll.animateTo(target,
+            duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      }
+      setState(() => _page = paraIdx ~/ BookParser.perPage);
       _saveProgress();
     }
   }
@@ -2118,11 +2154,13 @@ class _TocPanelState extends State<_TocPanel> with SingleTickerProviderStateMixi
 
 class _SearchPanel extends StatefulWidget {
   final List<String> paragraphs;
-  final void Function(int page, String query) onJumpToPage;
+  final int totalPages;
+  final void Function(int paraIdx, String query) onJump;
 
   const _SearchPanel({
     required this.paragraphs,
-    required this.onJumpToPage,
+    required this.totalPages,
+    required this.onJump,
   });
 
   @override
@@ -2131,7 +2169,7 @@ class _SearchPanel extends StatefulWidget {
 
 class _SearchPanelState extends State<_SearchPanel> {
   final _ctrl = TextEditingController();
-  List<({int page, String snippet})> _results = [];
+  List<({int paraIdx, String snippet})> _results = [];
 
   @override
   void initState() {
@@ -2152,13 +2190,12 @@ class _SearchPanelState extends State<_SearchPanel> {
       setState(() => _results = []);
       return;
     }
-    final results = <({int page, String snippet})>[];
+    final results = <({int paraIdx, String snippet})>[];
     for (var i = 0; i < widget.paragraphs.length; i++) {
       final para = widget.paragraphs[i];
       if (para.toLowerCase().contains(q)) {
         final snippet = BookParser.extractSentence(para, _ctrl.text.trim());
-        final page = i ~/ BookParser.perPage;
-        results.add((page: page, snippet: snippet));
+        results.add((paraIdx: i, snippet: snippet));
         if (results.length >= 200) break; // cap results
       }
     }
@@ -2249,12 +2286,15 @@ class _SearchPanelState extends State<_SearchPanel> {
                   separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
                   itemBuilder: (_, i) {
                     final r = _results[i];
+                    // Show approximate page number for user reference
+                    final approxPage = (r.paraIdx * widget.totalPages /
+                        widget.paragraphs.length.clamp(1, 999999)).floor() + 1;
                     return InkWell(
-                      onTap: () => widget.onJumpToPage(r.page, _ctrl.text.trim()),
+                      onTap: () => widget.onJump(r.paraIdx, _ctrl.text.trim()),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text('第 ${r.page + 1} 页',
+                          Text('约第 $approxPage 页',
                               style: const TextStyle(
                                   fontSize: 11, color: AppTheme.textTertiary, fontWeight: FontWeight.w600)),
                           const SizedBox(height: 4),
