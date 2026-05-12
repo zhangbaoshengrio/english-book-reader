@@ -1077,17 +1077,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
 class _VocabTextController extends TextEditingController {
   Set<String> vocabSet;
   Color textColor;
-  String? searchHighlight;
+  String? _searchHighlight;
   static final _wordRe = RegExp(r"\b[a-zA-Z]+(?:'[a-zA-Z]+)?\b");
   static const _hlColor = Color(0x55D4A017);
   static const _searchHlColor = Color(0x55007AFF);
+
+  String? get searchHighlight => _searchHighlight;
+  set searchHighlight(String? v) {
+    if (_searchHighlight == v) return;
+    _searchHighlight = v;
+    notifyListeners();
+  }
 
   _VocabTextController({
     required String text,
     required this.vocabSet,
     required this.textColor,
-    this.searchHighlight,
-  }) : super(text: text);
+    String? searchHighlight,
+  })  : _searchHighlight = searchHighlight,
+        super(text: text);
 
   @override
   TextSpan buildTextSpan({
