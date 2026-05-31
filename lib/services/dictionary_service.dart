@@ -43,6 +43,14 @@ class DictionaryService {
       if (cachedJson != null) {
         phonetic = _parseJson(cachedJson, word).phonetic;
       }
+      // No cached phonetic — pull it from the dictionary's own HTML.
+      if (phonetic.isEmpty) {
+        for (final dr in dictResults) {
+          if (!dr.isHtml) continue;
+          final p = _phoneticFromHtml(dr.content);
+          if (p.isNotEmpty) { phonetic = p; break; }
+        }
+      }
       // Use cached Google Translate if available; otherwise use dict-derived CN.
       final cn = (cachedChinese != null && cachedChinese.isNotEmpty)
           ? cachedChinese
@@ -337,6 +345,50 @@ class DictionaryService {
 
   static bool _hasChinese(String text) =>
       RegExp(r'[\u4e00-\u9fff]').hasMatch(text);
+
+  /// Extract a phonetic / IPA string from MDX dictionary HTML.
+  /// Scans common phonetic markup across Oxford / Longman / Collins etc.
+  /// Returns '' if none found. Result is normalised to /\u2026/ form.
+  static String _phoneticFromHtml(String htmlStr) {
+    try {
+      // Multiple entries are \x00-separated; the headword's phonetic is in the first.
+      final first = htmlStr.split('\x00').first;
+      final doc = html_parser.parse(first);
+
+      // Class-based selectors, ordered by specificity.
+      // Oxford OALD: .phon (inside .phonetics / .pron-g), UK .phon_br / .phon-gb,
+      //              US .phon_n_am / .phon-n-am. Longman: .PRON. Collins: .pron.
+      const sels = [
+        '.phon-gb', '.phon_br', '.phon-n-am', '.phon_n_am',
+        '.phon', '.phons', '.pron', '.PRON', '.ipa', '.IPA',
+        '.phonetics', '.pron-g', '.Phon', '.PHON',
+      ];
+      for (final sel in sels) {
+        final el = doc.querySelector(sel);
+        if (el == null) continue;
+        final t = _normalisePhonetic(el.text);
+        if (t.isNotEmpty) return t;
+      }
+
+      // Tag-based: some dicts use a literal <phon> element.
+      for (final tag in ['phon', 'ipa']) {
+        final el = doc.querySelector(tag);
+        if (el != null) {
+          final t = _normalisePhonetic(el.text);
+          if (t.isNotEmpty) return t;
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  /// Collapse whitespace, strip wrapping slashes/brackets, re-wrap as /\u2026/.
+  static String _normalisePhonetic(String raw) {
+    var t = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    t = t.replaceAll(RegExp(r'^[/\[\(]+|[/\]\)]+$'), '').trim();
+    if (t.isEmpty) return '';
+    return '/$t/';
+  }
 
   // ── JSON parse ────────────────────────────────────────────────────────────
 
