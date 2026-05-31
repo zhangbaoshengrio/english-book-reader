@@ -154,11 +154,12 @@ class DatabaseService {
 
   static Future<int> addOrUpdateWord(VocabEntry entry) async {
     final db = await _database;
+    // Allow multiple definitions per word: only skip if same word+definition exists
     final exists = await db.query(
       'vocabulary',
       columns: ['id'],
-      where: 'LOWER(word) = LOWER(?)',
-      whereArgs: [entry.word],
+      where: 'LOWER(word) = LOWER(?) AND LOWER(definition) = LOWER(?)',
+      whereArgs: [entry.word, entry.definition],
     );
     if (exists.isNotEmpty) {
       final id = exists.first['id'] as int;
@@ -193,13 +194,16 @@ class DatabaseService {
     return rows.map((r) => (r['word'] as String).toLowerCase()).toSet();
   }
 
-  static Future<Map<String, String>> getVocabWordDefMap() async {
+  static Future<Map<String, Set<String>>> getVocabWordDefMap() async {
     final db = await _database;
     final rows = await db.query('vocabulary', columns: ['word', 'definition']);
-    return {
-      for (final r in rows)
-        (r['word'] as String).toLowerCase(): (r['definition'] as String?) ?? '',
-    };
+    final map = <String, Set<String>>{};
+    for (final r in rows) {
+      final key = (r['word'] as String).toLowerCase();
+      final def = (r['definition'] as String?) ?? '';
+      map.putIfAbsent(key, () => {}).add(def);
+    }
+    return map;
   }
 
   static Future<void> deleteWord(int id) async {
@@ -211,6 +215,13 @@ class DatabaseService {
     final db = await _database;
     await db.delete('vocabulary',
         where: 'LOWER(word) = LOWER(?)', whereArgs: [word.toLowerCase()]);
+  }
+
+  static Future<void> deleteWordByNameAndDef(String word, String definition) async {
+    final db = await _database;
+    await db.delete('vocabulary',
+        where: 'LOWER(word) = LOWER(?) AND LOWER(definition) = LOWER(?)',
+        whereArgs: [word.toLowerCase(), definition.toLowerCase()]);
   }
 
   static Future<void> clearAllWords() async {

@@ -32,7 +32,7 @@ class ReaderScreen extends StatefulWidget {
 class _ReaderScreenState extends State<ReaderScreen> {
   late int _page;
   Set<String> _vocabSet = {};
-  Map<String, String> _vocabDefMap = {};
+  Map<String, Set<String>> _vocabDefMap = {};
   List<DictSource> _activeSources = [];
   final _scroll = ScrollController();
   late PageController _pageCtrl;
@@ -433,10 +433,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
             word: word,
             sentence: sentence,
             bookTitle: widget.book.title,
-            savedDefinitionText: _vocabDefMap[word.toLowerCase()],
+            savedDefinitions: _vocabDefMap[word.toLowerCase()] ?? {},
             allSources: _activeSources,
             onStar: (def) => _starDefinition(word, sentence, def, _overlayResult?.phonetic ?? ''),
-            onUnstar: () => _unstar(word),
+            onUnstar: (def) => _unstarDefinition(word, def),
             onDismiss: _removeOverlay,
             onEdit: () => _editVocabEntry(word),
             onToolbarAction: (action, w) => _onWordToolbarAction(action, w),
@@ -538,6 +538,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _unstar(String word) async {
     await DatabaseService.deleteWordByName(word);
+    await _refreshVocab();
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  Future<void> _unstarDefinition(String word, String definition) async {
+    await DatabaseService.deleteWordByNameAndDef(word, definition);
     await _refreshVocab();
     _overlayEntry?.markNeedsBuild();
   }

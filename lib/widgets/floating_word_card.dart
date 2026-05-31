@@ -18,10 +18,10 @@ class FloatingWordCard extends StatefulWidget {
   final String word;
   final String sentence;
   final String bookTitle;
-  final String? savedDefinitionText;
+  final Set<String> savedDefinitions;
   final List<DictSource> allSources; // ordered, enabled sources (builtin + custom)
   final void Function(Definition def) onStar;
-  final void Function() onUnstar;
+  final void Function(String definition) onUnstar;
   final VoidCallback onDismiss;
   final VoidCallback? onEdit;
   final void Function(String action, String word)? onToolbarAction;
@@ -33,7 +33,7 @@ class FloatingWordCard extends StatefulWidget {
     required this.word,
     required this.sentence,
     required this.bookTitle,
-    this.savedDefinitionText,
+    this.savedDefinitions = const {},
     this.allSources = const [],
     required this.onStar,
     required this.onUnstar,
@@ -101,10 +101,9 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
   }
 
   bool get _isAiResultSaved {
-    final saved = widget.savedDefinitionText ?? '';
-    if (saved.isEmpty || _aiResult == null) return false;
-    // AI result is saved if the savedDefinitionText starts with the AI prefix
-    return saved.startsWith('[AI]');
+    if (widget.savedDefinitions.isEmpty || _aiResult == null) return false;
+    // AI result is saved if any saved definition starts with the AI prefix
+    return widget.savedDefinitions.any((d) => d.startsWith('[AI]'));
   }
 
   void _starAiResult() {
@@ -160,7 +159,7 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
     return _CustomDictContent(
       content: dr.content,
       isHtml: dr.isHtml,
-      savedDefinitionText: widget.savedDefinitionText,
+      savedDefinitions: widget.savedDefinitions,
       onSaveDefinition: (def) => widget.onStar(def),
       onUnstar: widget.onUnstar,
       onEdit: widget.onEdit,
@@ -231,7 +230,11 @@ class _FloatingWordCardState extends State<FloatingWordCard> {
                 onRefresh: () => _fetchAiResult(reset: true),
                 isSaved: _isAiResultSaved,
                 onStar: _starAiResult,
-                onUnstar: widget.onUnstar,
+                onUnstar: () {
+                  // Find the saved AI definition to unstar
+                  final aiDef = widget.savedDefinitions.where((d) => d.startsWith('[AI]'));
+                  if (aiDef.isNotEmpty) widget.onUnstar(aiDef.first);
+                },
               )
             else if (sources.isEmpty)
               const Padding(
@@ -448,15 +451,15 @@ class _LogoTabItem extends StatelessWidget {
 class _CustomDictContent extends StatelessWidget {
   final String content;
   final bool isHtml;
-  final String? savedDefinitionText;
+  final Set<String> savedDefinitions;
   final void Function(Definition def)? onSaveDefinition;
-  final VoidCallback? onUnstar;
+  final void Function(String definition)? onUnstar;
   final VoidCallback? onEdit;
 
   const _CustomDictContent({
     required this.content,
     this.isHtml = false,
-    this.savedDefinitionText,
+    this.savedDefinitions = const {},
     this.onSaveDefinition,
     this.onUnstar,
     this.onEdit,
@@ -474,14 +477,17 @@ class _CustomDictContent extends StatelessWidget {
       );
     }
 
-    final saved = savedDefinitionText ?? '';
-    final savedPfx = saved.length > 60 ? saved.substring(0, 60) : saved;
+    // Build prefix set for matching saved definitions
+    final savedPrefixes = savedDefinitions
+        .map((s) => s.length > 60 ? s.substring(0, 60) : s)
+        .where((s) => s.isNotEmpty)
+        .toSet();
 
-    // Sort: starred definition first
-    if (savedPfx.isNotEmpty) {
+    // Sort: starred definitions first
+    if (savedPrefixes.isNotEmpty) {
       defs.sort((a, b) {
-        final aStarred = a.text.contains(savedPfx) ? 0 : 1;
-        final bStarred = b.text.contains(savedPfx) ? 0 : 1;
+        final aStarred = savedPrefixes.any((p) => a.text.contains(p)) ? 0 : 1;
+        final bStarred = savedPrefixes.any((p) => b.text.contains(p)) ? 0 : 1;
         return aStarred.compareTo(bStarred);
       });
     }
@@ -496,7 +502,13 @@ class _CustomDictContent extends StatelessWidget {
         itemBuilder: (_, i) {
           final d = defs[i];
           final isSaved =
-              savedPfx.isNotEmpty && d.text.contains(savedPfx);
+              savedPrefixes.isNotEmpty && savedPrefixes.any((p) => d.text.contains(p));
+          // Find the full saved definition text for unstar
+          final matchedDef = isSaved
+              ? savedDefinitions.firstWhere(
+                  (s) => d.text.contains(s.length > 60 ? s.substring(0, 60) : s),
+                  orElse: () => d.text)
+              : d.text;
           return _DefRow(
             def: Definition(partOfSpeech: d.pos, text: d.text),
             isSaved: isSaved,
@@ -509,7 +521,7 @@ class _CustomDictContent extends StatelessWidget {
               onSaveDefinition?.call(
                   Definition(partOfSpeech: d.pos, text: txt, chineseText: d.cn));
             },
-            onUnstar: onUnstar ?? () {},
+            onUnstar: () => onUnstar?.call(matchedDef),
             onEdit: isSaved ? onEdit : null,
           );
         },
