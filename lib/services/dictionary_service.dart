@@ -378,8 +378,40 @@ class DictionaryService {
           if (t.isNotEmpty) return t;
         }
       }
+
+      // ── Format-agnostic fallback ────────────────────────────────────────────
+      // Many dicts use unknown class names, or wrap phonetics in slashes via CSS
+      // (so the text holds only bare IPA like "bɪˈɡɪn"). Detect by IPA characters.
+      final bodyText = doc.body?.text ?? first;
+
+      // (a) IPA wrapped in / / or [ ] somewhere in the text.
+      for (final m in RegExp(r'[/\[]\s*([^/\[\]\n]{1,40}?)\s*[/\]]')
+          .allMatches(bodyText)) {
+        final cand = m.group(1)!.trim();
+        if (_looksLikeIpa(cand)) return _normalisePhonetic(cand);
+      }
+
+      // (b) Any short leaf element whose text is dominated by IPA characters.
+      for (final el in doc.querySelectorAll('*')) {
+        if (el.children.isNotEmpty) continue; // leaf only
+        final t = el.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (t.length < 2 || t.length > 40) continue;
+        if (_looksLikeIpa(t)) return _normalisePhonetic(t);
+      }
     } catch (_) {}
     return '';
+  }
+
+  // Distinctive IPA symbols that don't occur in normal English spelling.
+  static final _ipaChars = RegExp(
+      r'[ˈˌːˑəɪʊɒæʌɜɑɔθðʃʒŋɡɹɛɝɚɐɵʁɲ̃]');
+
+  /// True if [s] looks like a phonetic transcription (contains a distinctive
+  /// IPA symbol and no CJK / sentence punctuation).
+  static bool _looksLikeIpa(String s) {
+    if (s.isEmpty || _hasChinese(s)) return false;
+    if (RegExp(r'[!?]').hasMatch(s)) return false; // a sentence, not phonetic
+    return _ipaChars.hasMatch(s);
   }
 
   /// Collapse whitespace, strip wrapping slashes/brackets, re-wrap as /\u2026/.
